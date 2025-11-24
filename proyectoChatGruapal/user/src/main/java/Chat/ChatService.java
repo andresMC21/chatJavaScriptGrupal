@@ -41,6 +41,14 @@ public interface ChatService extends com.zeroc.Ice.Object
 
     void endVoiceCall(String userId, com.zeroc.Ice.Current current);
 
+    void answerVoiceCall(String userId, com.zeroc.Ice.Current current);
+
+    void rejectVoiceCall(String userId, com.zeroc.Ice.Current current);
+
+    void sendWebRTCSignal(String userId, String targetUserId, String signalData, com.zeroc.Ice.Current current);
+
+    void sendWebRTCAnswer(String userId, String targetUserId, String signalData, com.zeroc.Ice.Current current);
+
     void sendGroupMessage(String groupId, String userId, String content, MessageTypeEnum type, com.zeroc.Ice.Current current);
 
     MessageDTO[] getGroupMessages(String groupId, com.zeroc.Ice.Current current);
@@ -319,6 +327,86 @@ public interface ChatService extends com.zeroc.Ice.Object
      * @param current -
      * @return -
     **/
+    static java.util.concurrent.CompletionStage<com.zeroc.Ice.OutputStream> _iceD_answerVoiceCall(ChatService obj, final com.zeroc.IceInternal.Incoming inS, com.zeroc.Ice.Current current)
+    {
+        com.zeroc.Ice.Object._iceCheckMode(null, current.mode);
+        com.zeroc.Ice.InputStream istr = inS.startReadParams();
+        String iceP_userId;
+        iceP_userId = istr.readString();
+        inS.endReadParams();
+        obj.answerVoiceCall(iceP_userId, current);
+        return inS.setResult(inS.writeEmptyParams());
+    }
+
+    /**
+     * @hidden
+     * @param obj -
+     * @param inS -
+     * @param current -
+     * @return -
+    **/
+    static java.util.concurrent.CompletionStage<com.zeroc.Ice.OutputStream> _iceD_rejectVoiceCall(ChatService obj, final com.zeroc.IceInternal.Incoming inS, com.zeroc.Ice.Current current)
+    {
+        com.zeroc.Ice.Object._iceCheckMode(null, current.mode);
+        com.zeroc.Ice.InputStream istr = inS.startReadParams();
+        String iceP_userId;
+        iceP_userId = istr.readString();
+        inS.endReadParams();
+        obj.rejectVoiceCall(iceP_userId, current);
+        return inS.setResult(inS.writeEmptyParams());
+    }
+
+    /**
+     * @hidden
+     * @param obj -
+     * @param inS -
+     * @param current -
+     * @return -
+    **/
+    static java.util.concurrent.CompletionStage<com.zeroc.Ice.OutputStream> _iceD_sendWebRTCSignal(ChatService obj, final com.zeroc.IceInternal.Incoming inS, com.zeroc.Ice.Current current)
+    {
+        com.zeroc.Ice.Object._iceCheckMode(null, current.mode);
+        com.zeroc.Ice.InputStream istr = inS.startReadParams();
+        String iceP_userId;
+        String iceP_targetUserId;
+        String iceP_signalData;
+        iceP_userId = istr.readString();
+        iceP_targetUserId = istr.readString();
+        iceP_signalData = istr.readString();
+        inS.endReadParams();
+        obj.sendWebRTCSignal(iceP_userId, iceP_targetUserId, iceP_signalData, current);
+        return inS.setResult(inS.writeEmptyParams());
+    }
+
+    /**
+     * @hidden
+     * @param obj -
+     * @param inS -
+     * @param current -
+     * @return -
+    **/
+    static java.util.concurrent.CompletionStage<com.zeroc.Ice.OutputStream> _iceD_sendWebRTCAnswer(ChatService obj, final com.zeroc.IceInternal.Incoming inS, com.zeroc.Ice.Current current)
+    {
+        com.zeroc.Ice.Object._iceCheckMode(null, current.mode);
+        com.zeroc.Ice.InputStream istr = inS.startReadParams();
+        String iceP_userId;
+        String iceP_targetUserId;
+        String iceP_signalData;
+        iceP_userId = istr.readString();
+        iceP_targetUserId = istr.readString();
+        iceP_signalData = istr.readString();
+        inS.endReadParams();
+        obj.sendWebRTCAnswer(iceP_userId, iceP_targetUserId, iceP_signalData, current);
+        return inS.setResult(inS.writeEmptyParams());
+    }
+
+    /**
+     * @hidden
+     * @param obj -
+     * @param inS -
+     * @param current -
+     * @return -
+    **/
     static java.util.concurrent.CompletionStage<com.zeroc.Ice.OutputStream> _iceD_sendGroupMessage(ChatService obj, final com.zeroc.IceInternal.Incoming inS, com.zeroc.Ice.Current current)
     {
         com.zeroc.Ice.Object._iceCheckMode(null, current.mode);
@@ -360,6 +448,7 @@ public interface ChatService extends com.zeroc.Ice.Object
     /** @hidden */
     final static String[] _iceOps =
     {
+        "answerVoiceCall",
         "createGroup",
         "endVoiceCall",
         "getGroupMessages",
@@ -374,9 +463,12 @@ public interface ChatService extends com.zeroc.Ice.Object
         "joinChat",
         "joinGroup",
         "leaveChat",
+        "rejectVoiceCall",
         "sendGroupMessage",
         "sendMessage",
         "sendPrivateMessage",
+        "sendWebRTCAnswer",
+        "sendWebRTCSignal",
         "startVoiceCall"
     };
 
@@ -395,73 +487,89 @@ public interface ChatService extends com.zeroc.Ice.Object
         {
             case 0:
             {
-                return _iceD_createGroup(this, in, current);
+                return _iceD_answerVoiceCall(this, in, current);
             }
             case 1:
             {
-                return _iceD_endVoiceCall(this, in, current);
+                return _iceD_createGroup(this, in, current);
             }
             case 2:
             {
-                return _iceD_getGroupMessages(this, in, current);
+                return _iceD_endVoiceCall(this, in, current);
             }
             case 3:
             {
-                return _iceD_getGroups(this, in, current);
+                return _iceD_getGroupMessages(this, in, current);
             }
             case 4:
             {
-                return _iceD_getMessages(this, in, current);
+                return _iceD_getGroups(this, in, current);
             }
             case 5:
             {
-                return _iceD_getPrivateMessages(this, in, current);
+                return _iceD_getMessages(this, in, current);
             }
             case 6:
             {
-                return _iceD_getUsers(this, in, current);
+                return _iceD_getPrivateMessages(this, in, current);
             }
             case 7:
             {
-                return com.zeroc.Ice.Object._iceD_ice_id(this, in, current);
+                return _iceD_getUsers(this, in, current);
             }
             case 8:
             {
-                return com.zeroc.Ice.Object._iceD_ice_ids(this, in, current);
+                return com.zeroc.Ice.Object._iceD_ice_id(this, in, current);
             }
             case 9:
             {
-                return com.zeroc.Ice.Object._iceD_ice_isA(this, in, current);
+                return com.zeroc.Ice.Object._iceD_ice_ids(this, in, current);
             }
             case 10:
             {
-                return com.zeroc.Ice.Object._iceD_ice_ping(this, in, current);
+                return com.zeroc.Ice.Object._iceD_ice_isA(this, in, current);
             }
             case 11:
             {
-                return _iceD_joinChat(this, in, current);
+                return com.zeroc.Ice.Object._iceD_ice_ping(this, in, current);
             }
             case 12:
             {
-                return _iceD_joinGroup(this, in, current);
+                return _iceD_joinChat(this, in, current);
             }
             case 13:
             {
-                return _iceD_leaveChat(this, in, current);
+                return _iceD_joinGroup(this, in, current);
             }
             case 14:
             {
-                return _iceD_sendGroupMessage(this, in, current);
+                return _iceD_leaveChat(this, in, current);
             }
             case 15:
             {
-                return _iceD_sendMessage(this, in, current);
+                return _iceD_rejectVoiceCall(this, in, current);
             }
             case 16:
             {
-                return _iceD_sendPrivateMessage(this, in, current);
+                return _iceD_sendGroupMessage(this, in, current);
             }
             case 17:
+            {
+                return _iceD_sendMessage(this, in, current);
+            }
+            case 18:
+            {
+                return _iceD_sendPrivateMessage(this, in, current);
+            }
+            case 19:
+            {
+                return _iceD_sendWebRTCAnswer(this, in, current);
+            }
+            case 20:
+            {
+                return _iceD_sendWebRTCSignal(this, in, current);
+            }
+            case 21:
             {
                 return _iceD_startVoiceCall(this, in, current);
             }

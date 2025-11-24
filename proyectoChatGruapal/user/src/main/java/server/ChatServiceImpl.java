@@ -28,6 +28,9 @@ public class ChatServiceImpl implements ChatService, Subject {
     private int messageCounter = 0;
     private int groupCounter = 0;
 
+    // ========== GESTOR DE LLAMADAS ==========
+    private final VoiceCallManager callManager = new VoiceCallManager();
+
     // ========== RESOLVER CONFLICTOS DE INTERFACES ==========
     
     @Override
@@ -86,6 +89,32 @@ public class ChatServiceImpl implements ChatService, Subject {
         User user = users.get(userId);
         if (user != null) {
             user.setOnline(false);
+
+            //metodo para finalizar llamada cunado alguien se va del chat
+            if (callManager.isUserInCall(userId)) {
+                System.out.println(" Usuario " + user.getUsername() + 
+                                  " se desconectó durante una llamada. Finalizando...");
+                
+                VoiceCall call = callManager.endCall(userId);
+                if (call != null) {
+                    // Crear mensaje de finalización forzada
+                    Message callEndMsg = new Message(
+                        "msg_" + (++messageCounter),
+                        "system",
+                        "System",
+                        " Llamada finalizada (usuario desconectado) • Duración: " + 
+                        call.getFormattedDuration(),
+                        MessageType.VOICECALL
+                    );
+                    
+                    String otherUserId = call.getOtherParticipant(userId);
+                    if (otherUserId != null) {
+                        String chatId = getPrivateChatId(userId, otherUserId);
+                        privateMessages.computeIfAbsent(chatId, k -> new CopyOnWriteArrayList<>())
+                                     .add(callEndMsg);
+                    }
+                }
+            }
             
             Message systemMsg = new Message(
                 "msg_" + (++messageCounter),
@@ -136,6 +165,60 @@ public class ChatServiceImpl implements ChatService, Subject {
         notifyObservers();
         
         System.out.println("[" + user.getUsername() + "]: " + content);
+    }
+
+    @Override
+    public void answerVoiceCall(String userId, Current current) {
+        User user = users.get(userId);
+        
+        if (user == null) {
+            System.err.println(" Usuario no encontrado: " + userId);
+            return;
+        }
+
+        // Delegar al manager el manejo de contestar llamada
+        if (!callManager.answerCall(userId)) {
+            System.err.println(" No se pudo contestar la llamada para: " + user.getUsername());
+            return;
+        }
+
+        String callerId = callManager.getOtherParticipant(userId);
+        if (callerId != null) {
+            // Crear mensaje de llamada contestada
+            createCallMessage(callerId, userId, 
+                "Llamada contestada", 
+                user.getUsername() + " contestó la llamada"
+            );
+        }
+        
+        System.out.println( user.getUsername() + " contestó la llamada");
+    }
+
+    @Override
+    public void rejectVoiceCall(String userId, Current current) {
+        User user = users.get(userId);
+        
+        if (user == null) {
+            System.err.println(" Usuario no encontrado: " + userId);
+            return;
+        }
+
+        // Delegar al manager el rechazo de llamada
+        VoiceCall call = callManager.rejectCall(userId);
+        
+        if (call == null) {
+            System.err.println(" No hay llamada para rechazar: " + user.getUsername());
+            return;
+        }
+
+        String callerId = call.getCallerId();
+        // Crear mensaje de llamada rechazada
+        createCallMessage(callerId, userId, 
+            "Llamada rechazada", 
+            user.getUsername() + " rechazó la llamada"
+        );
+        
+        System.out.println( user.getUsername() + " rechazó la llamada");
     }
 
     @Override
@@ -278,37 +361,218 @@ public class ChatServiceImpl implements ChatService, Subject {
     public void startVoiceCall(String userId, String targetUserId, Current current) {
         User caller = users.get(userId);
         User target = users.get(targetUserId);
-        
-        if (caller != null && target != null) {
-            Message callMsg = new Message(
-                "msg_" + (++messageCounter),
-                userId,
-                caller.getUsername(),
-                "Llamada de voz iniciada con " + target.getUsername(),
-                MessageType.VOICECALL
-            );
-            messages.add(callMsg);
-            notifyObservers();
-            System.out.println("Llamada iniciada: " + caller.getUsername() + " -> " + target.getUsername());
+
+        // Validar que ambos usuarios existen (las llamadas son entre dos usuarios)
+        if (caller == null) {
+            System.err.println(" Usuario llamador no encontrado: " + userId);
+            return;
         }
+        
+        if (target == null) {
+            System.err.println(" Usuario objetivo no encontrado: " + targetUserId);
+            return;
+        }
+
+        // ========== USAR EL CALL MANAGER ==========
+        VoiceCall call = callManager.startCall(
+            userId, caller.getUsername(),
+            targetUserId, target.getUsername()
+        );
+
+        if (call == null) {
+            // La llamada no se pudo iniciar (usuario ocupado)
+            String otherUser = callManager.isUserInCall(userId) ? 
+                             caller.getUsername() : target.getUsername();
+            
+            Message busyMsg = new Message(
+                "msg_" + (++messageCounter),
+                "system",
+                "System",
+                otherUser + " está en otra llamada",
+                MessageType.SYSTEM
+            );
+            
+            String chatId = getPrivateChatId(userId, targetUserId);
+            privateMessages.computeIfAbsent(chatId, k -> new CopyOnWriteArrayList<>()).add(busyMsg);
+            
+            notifyObservers();
+            return;
+        }
+
+        // Llamada iniciada exitosamente, crear mensaje
+        Message callMsg = new Message(
+            "msg_" + (++messageCounter),
+            userId,
+            caller.getUsername(),
+            " Llamada de voz iniciada",
+            MessageType.VOICECALL
+        );
+        
+        String chatId = getPrivateChatId(userId, targetUserId);
+        privateMessages.computeIfAbsent(chatId, k -> new CopyOnWriteArrayList<>()).add(callMsg);
+        
+        notifyObservers();
+        
     }
 
     @Override
     public void endVoiceCall(String userId, Current current) {
         User user = users.get(userId);
-        if (user != null) {
-            Message callMsg = new Message(
-                "msg_" + (++messageCounter),
-                userId,
-                user.getUsername(),
-                "Llamada de voz finalizada",
-                MessageType.VOICECALL
-            );
-            messages.add(callMsg);
-            notifyObservers();
-            System.out.println("Llamada finalizada: " + user.getUsername());
+        
+        if (user == null) {
+            System.err.println(" Usuario no encontrado: " + userId);
+            return;
         }
+        
+        // ========== USAR EL CALL MANAGER ==========
+        VoiceCall call = callManager.endCall(userId);
+        
+        if (call == null) {
+            System.err.println(" Usuario " + user.getUsername() + " no está en ninguna llamada");
+            return;
+        }
+        
+        // Crear mensaje de finalización
+        Message callMsg = new Message(
+            "msg_" + (++messageCounter),
+            userId,
+            user.getUsername(),
+            " Llamada finalizada x Duración: " + call.getFormattedDuration(),
+            MessageType.VOICECALL
+        );
+        
+        String otherUserId = call.getOtherParticipant(userId);
+        if (otherUserId != null) {
+            String chatId = getPrivateChatId(userId, otherUserId);
+            privateMessages.computeIfAbsent(chatId, k -> new CopyOnWriteArrayList<>()).add(callMsg);
+        }
+        
+        notifyObservers();
     }
+
+    // ========== MÉTODOS DE SEÑALIZACIÓN WEBRTC ==========
+
+    @Override
+    public void sendWebRTCSignal(String userId, String targetUserId, String signalData, Current current) {
+        if (!validateUser(userId) || !validateUser(targetUserId)) {
+            return;
+        }
+
+        User sender = users.get(userId);
+        User target = users.get(targetUserId);
+        
+        System.out.println("📡 Enviando señal WebRTC de " + sender.getUsername() + 
+                          " a " + target.getUsername());
+        
+        sendWebRTCMessage(userId, targetUserId, "WEBRTC_SIGNAL:", signalData);
+    }
+
+    @Override
+    public void sendWebRTCAnswer(String userId, String targetUserId, String signalData, Current current) {
+        if (!validateUser(userId) || !validateUser(targetUserId)) {
+            return;
+        }
+
+        User sender = users.get(userId);
+        User target = users.get(targetUserId);
+        
+        System.out.println("📡 Enviando respuesta WebRTC de " + sender.getUsername() + 
+                          " a " + target.getUsername());
+        
+        sendWebRTCMessage(userId, targetUserId, "WEBRTC_ANSWER:", signalData);
+    }
+
+    /**
+     * Valida que ambos participantes de la llamada existan
+     */
+    private boolean validateCallParticipants(User caller, User target, String callerId, String targetId) {
+        if (caller == null) {
+            System.err.println("❌ Usuario llamador no encontrado: " + callerId);
+            return false;
+        }
+        
+        if (target == null) {
+            System.err.println("❌ Usuario objetivo no encontrado: " + targetId);
+            return false;
+        }
+
+        if (callerId.equals(targetId)) {
+            System.err.println("❌ Un usuario no puede llamarse a sí mismo");
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Maneja el caso cuando un usuario está ocupado
+     */
+    private void handleBusyCall(User caller, User target, String userId, String targetUserId) {
+        String busyUser = callManager.isUserInCall(userId) ? 
+                         caller.getUsername() : target.getUsername();
+        
+        Message busyMsg = new Message(
+            "msg_" + (++messageCounter),
+            "system",
+            "System",
+            busyUser + " está en otra llamada",
+            MessageType.SYSTEM
+        );
+        
+        String chatId = getPrivateChatId(userId, targetUserId);
+        privateMessages.computeIfAbsent(chatId, k -> new CopyOnWriteArrayList<>()).add(busyMsg);
+        
+        notifyObservers();
+    }
+
+    /**
+     * Crea un mensaje de llamada en el chat privado
+     */
+    private void createCallMessage(String userId, String targetUserId, String content, String logMessage) {
+        Message callMsg = new Message(
+            "msg_" + (++messageCounter),
+            userId,
+            users.get(userId).getUsername(),
+            content,
+            MessageType.VOICECALL
+        );
+        
+        String chatId = getPrivateChatId(userId, targetUserId);
+        privateMessages.computeIfAbsent(chatId, k -> new CopyOnWriteArrayList<>()).add(callMsg);
+        
+        notifyObservers();
+        System.out.println("📞 " + logMessage);
+    }
+
+    /**
+     * Envía un mensaje de señalización WebRTC
+     */
+    private void sendWebRTCMessage(String userId, String targetUserId, String prefix, String signalData) {
+        Message signalMsg = new Message(
+            "signal_" + System.currentTimeMillis(),
+            userId,
+            users.get(userId).getUsername(),
+            prefix + signalData,
+            MessageType.VOICECALL
+        );
+        
+        String chatId = getPrivateChatId(userId, targetUserId);
+        privateMessages.computeIfAbsent(chatId, k -> new CopyOnWriteArrayList<>()).add(signalMsg);
+        
+        notifyObservers();
+    }
+
+    /**
+     * Valida que un usuario exista
+     */
+    private boolean validateUser(String userId) {
+        if (!users.containsKey(userId)) {
+            System.err.println("❌ Usuario no encontrado: " + userId);
+            return false;
+        }
+        return true;
+    }
+
 
     // ========== PATRÓN OBSERVER ==========
 
@@ -418,5 +682,4 @@ public class ChatServiceImpl implements ChatService, Subject {
             .map(Message::toDTO)
             .toArray(MessageDTO[]::new);
     }
-
 }

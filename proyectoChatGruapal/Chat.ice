@@ -80,6 +80,12 @@ module Chat {
         // Voice calls
         void startVoiceCall(string userId, string targetUserId);
         void endVoiceCall(string userId);
+        void answerVoiceCall(string userId);
+        void rejectVoiceCall(string userId);
+
+        // Señalización WebRTC
+        void sendWebRTCSignal(string userId, string targetUserId, string signalData);
+        void sendWebRTCAnswer(string userId, string targetUserId, string signalData);
 
         // Private Mesage Groups
         void sendGroupMessage(string groupId, string userId, string content, MessageTypeEnum type);

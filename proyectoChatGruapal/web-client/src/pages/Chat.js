@@ -205,6 +205,10 @@
         "getGroups": [, , , , ["Chat.GroupListHelper"], , , , , ],
         "startVoiceCall": [, , , , , [[7], [7]], , , , ],
         "endVoiceCall": [, , , , , [[7]], , , , ],
+        "answerVoiceCall": [, , , , , [[7]], , , , ],
+        "rejectVoiceCall": [, , , , , [[7]], , , , ],
+        "sendWebRTCSignal": [, , , , , [[7], [7], [7]], , , , ],
+        "sendWebRTCAnswer": [, , , , , [[7], [7], [7]], , , , ],
         "sendGroupMessage": [, , , , , [[7], [7], [7], [Chat.MessageTypeEnum._helper]], , , , ],
         "getGroupMessages": [, , , , ["Chat.MessageListHelper"], [[7]], , , , ]
     });

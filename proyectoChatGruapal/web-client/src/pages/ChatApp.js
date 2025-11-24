@@ -17,6 +17,24 @@ class ChatApp {
         this.selectedGroup = null;
         this.userGroups = new Set(); // Grupos a los que el usuario pertenece
 
+        // Estado de llamadas
+        // Estado de llamadas WebRTC
+        this.currentCall = null;
+        this.isInCall = false;
+        this.isRinging = false; // Para llamadas entrantes
+        this.callDurationInterval = null;
+        this.callStartTime = null;
+        
+        // WebRTC
+        this.localStream = null;
+        this.remoteStream = null;
+        this.peerConnection = null;
+        this.rtcConfiguration = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+        };
 
         // Referencias DOM
         this.messagesContainer = document.getElementById('messages');
@@ -186,6 +204,9 @@ class ChatApp {
                     this.currentUser.id,
                     this.selectedContact.id
                 );
+
+                // Procesar señales WebRTC en mensajes privados
+                this.processWebRTCSignals(messages);
             } else {
                 // Obtener mensajes del chat general
                 messages = await this.chatService.getMessages();
@@ -193,6 +214,212 @@ class ChatApp {
             this.renderMessages(messages);
         } catch (error) {
             console.error("Error obteniendo mensajes:", error);
+        }
+    }
+
+    processWebRTCSignals(messages) {
+        messages.forEach(msg => {
+            if (msg.type.value === ChatUI.MessageTypeEnum.VOICECALL.value) {
+                if (msg.content.includes('WEBRTC_SIGNAL:') && msg.senderId !== this.currentUser.id) {
+                    const signalData = msg.content.replace('WEBRTC_SIGNAL:', '');
+                    this.handleIncomingCall(msg.senderId, msg.senderName, signalData);
+                }
+                else if (msg.content.includes('WEBRTC_ANSWER:') && msg.senderId !== this.currentUser.id) {
+                    const signalData = msg.content.replace('WEBRTC_ANSWER:', '');
+                    this.handleWebRTCAnswer(signalData);
+                }
+            }
+        });
+    }
+
+
+
+    async handleWebRTCAnswer(signalData) {
+        if (!this.peerConnection) return;
+
+        const signal = JSON.parse(signalData);
+        
+        if (signal.type === 'answer') {
+            await this.peerConnection.setRemoteDescription(signal.answer);
+        } else if (signal.type === 'ice-candidate') {
+            await this.peerConnection.addIceCandidate(signal.candidate);
+        }
+    }
+
+    async handleIncomingCall(callerId, callerName, signalData) {
+        if (this.isInCall) {
+            console.log(" Ya en llamada, ignorando llamada entrante");
+            return;
+        }
+
+        const signal = JSON.parse(signalData);
+        
+        if (signal.type === 'offer') {
+            this.incomingCall = {
+                callerId: callerId,
+                callerName: callerName,
+                offer: signal.offer
+            };
+
+            this.showIncomingCallInterface(callerName);
+        }
+    }
+
+    showIncomingCallInterface(callerName) {
+        const incomingCallInterface = document.createElement('div');
+        incomingCallInterface.id = 'incomingCallInterface';
+        incomingCallInterface.className = 'call-interface incoming-call active';
+        
+        incomingCallInterface.innerHTML = `
+            <div class="call-container">
+                <div class="call-header">
+                    <div class="call-avatar incoming">
+                        <i class="fas fa-phone"></i>
+                    </div>
+                    <div class="call-info">
+                        <h3>${this.escapeHtml(callerName)}</h3>
+                        <div class="call-status">Llamada entrante...</div>
+                    </div>
+                </div>
+                <div class="call-controls">
+                    <button class="call-control-btn decline-btn" onclick="window.chatApp.rejectIncomingCall()">
+                        <i class="fas fa-times"></i>
+                    </button>
+                    <button class="call-control-btn answer-btn" onclick="window.chatApp.answerIncomingCall()">
+                        <i class="fas fa-phone"></i>
+                    </button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(incomingCallInterface);
+
+        // Reproducir sonido de llamada
+        this.playRingtone();
+    }
+
+    async answerIncomingCall() {
+        if (!this.incomingCall) return;
+
+        try {
+            // Ocultar interfaz de llamada entrante
+            this.hideIncomingCallInterface();
+
+            // Notificar al servidor que contestamos la llamada
+            await this.chatService.answerVoiceCall(this.currentUser.id);
+
+            // Obtener stream de audio
+            this.localStream = await navigator.mediaDevices.getUserMedia({ 
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true
+                },
+                video: false
+            });
+
+            // Crear conexión peer
+            this.peerConnection = new RTCPeerConnection(this.rtcConfiguration);
+
+            // Agregar stream local
+            this.localStream.getTracks().forEach(track => {
+                this.peerConnection.addTrack(track, this.localStream);
+            });
+
+            // Manejar stream remoto
+            this.peerConnection.ontrack = (event) => {
+                console.log(" Stream remoto recibido");
+                this.remoteStream = event.streams[0];
+                this.setupRemoteAudio();
+            };
+
+            // Manejar candidatos ICE
+            this.peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    this.sendWebRTCAnswer(this.incomingCall.callerId, {
+                        type: 'ice-candidate',
+                        candidate: event.candidate
+                    });
+                }
+            };
+
+            // Establecer oferta remota
+            await this.peerConnection.setRemoteDescription(this.incomingCall.offer);
+
+            // Crear respuesta
+            const answer = await this.peerConnection.createAnswer();
+            await this.peerConnection.setLocalDescription(answer);
+
+            // Enviar respuesta
+            this.sendWebRTCAnswer(this.incomingCall.callerId, {
+                type: 'answer',
+                answer: answer
+            });
+
+            this.isInCall = true;
+            this.currentCall = {
+                targetId: this.incomingCall.callerId,
+                startTime: new Date(),
+                isCaller: false
+            };
+
+            this.showCallInterface();
+            this.incomingCall = null;
+
+        } catch (error) {
+            console.error("Error contestando llamada:", error);
+            alert("Error al contestar la llamada");
+        }
+    }
+
+    async rejectIncomingCall() {
+        if (!this.incomingCall) return;
+
+        try {
+            await this.chatService.rejectVoiceCall(this.currentUser.id);
+            this.hideIncomingCallInterface();
+            this.incomingCall = null;
+        } catch (error) {
+            console.error("Error rechazando llamada:", error);
+        }
+    }
+
+    hideIncomingCallInterface() {
+        const incomingCallInterface = document.getElementById('incomingCallInterface');
+        if (incomingCallInterface) {
+            incomingCallInterface.remove();
+        }
+        this.stopRingtone();
+    }
+
+    playRingtone() {
+        // Crear un tono de llamada simple (puedes reemplazar con un archivo de audio)
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+        
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+        
+        oscillator.type = 'sine';
+        oscillator.frequency.value = 800;
+        gainNode.gain.value = 0.5;
+        
+        oscillator.start();
+        
+        // Detener después de 1 segundo y repetir
+        setInterval(() => {
+            oscillator.stop();
+            oscillator.start();
+        }, 1000);
+        
+        this.ringtone = oscillator;
+    }
+
+    stopRingtone() {
+        if (this.ringtone) {
+            this.ringtone.stop();
+            this.ringtone = null;
         }
     }
 
@@ -437,6 +664,7 @@ class ChatApp {
             return;
         }
 
+        //esta parte renderiza todos los elementos en comun que tendra cada usuario
         onlineUsers.forEach(user => {
             const contactDiv = document.createElement('div');
             contactDiv.className = 'contact';
@@ -444,6 +672,13 @@ class ChatApp {
 
             const initial = user.username.charAt(0).toUpperCase();
             const statusClass = user.isOnline ? 'online' : 'offline';
+
+            // Agregar botón de llamada a cada contacto
+            const callButton = this.isInCall ? '' : `
+                <button class="call-btn" title="Llamar" onclick="event.stopPropagation(); window.chatApp.startVoiceCall('${user.id}')">
+                    <i class="fas fa-phone"></i>
+                </button>
+            `;
 
             contactDiv.innerHTML = `
                 <div class="avatar">${initial}</div>
@@ -453,6 +688,7 @@ class ChatApp {
                         ${user.isOnline ? '● En línea' : '○ Desconectado'}
                     </div>
                 </div>
+                ${callButton}
             `;
 
             this.contactsList.appendChild(contactDiv);
@@ -466,20 +702,36 @@ class ChatApp {
         }
 
         const shouldScrollDown = this.isScrolledToBottom();
-
         this.messagesContainer.innerHTML = '';
 
-        if (messages.length === 0) {
+        // Filtrar mensajes de señal WebRTC (no mostrarlos en el chat)
+        const displayMessages = messages.filter(msg => 
+            !msg.content.includes('WEBRTC_SIGNAL:') && 
+            !msg.content.includes('WEBRTC_ANSWER:')
+        );
+
+        if (displayMessages.length === 0) {
+            let contextText = 'No hay mensajes aún. ¡Sé el primero en escribir!';
+            let icon = 'comment-dots';
+            
+            if (this.selectedGroup) {
+                contextText = `No hay mensajes en el grupo <strong>${this.escapeHtml(this.selectedGroup.name)}</strong>. ¡Sé el primero en escribir!`;
+                icon = 'users';
+            } else if (this.selectedContact) {
+                contextText = `No hay mensajes con <strong>${this.escapeHtml(this.selectedContact.username)}</strong>. ¡Inicia la conversación!`;
+                icon = 'comment';
+            }
+            
             this.messagesContainer.innerHTML = `
                 <div class="messages-placeholder">
-                    <i class="fas fa-comment-dots"></i>
-                    <p>No hay mensajes aún. ¡Sé el primero en escribir!</p>
+                    <i class="fas fa-${icon}"></i>
+                    <p>${contextText}</p>
                 </div>
             `;
             return;
         }
 
-        messages.forEach(msg => {
+        displayMessages.forEach(msg => {
             const messageDiv = this.createMessageElement(msg);
             this.messagesContainer.appendChild(messageDiv);
         });
@@ -502,18 +754,34 @@ class ChatApp {
                 </div>
             `;
         } else if (msg.type.value === ChatUI.MessageTypeEnum.VOICECALL.value) {
-            messageDiv.className = isMyMessage ? 'message my-message' : 'message other-message';
+            messageDiv.className = isMyMessage ? 'message my-message call-message' : 'message other-message call-message';
+            
+            // Determinar si es un mensaje de inicio o fin de llamada
+            const isCallStart = msg.content.includes('iniciada');
+            const isCallEnd = msg.content.includes('finalizada');
+            
+            const callIcon = isCallStart ? 'fa-phone' : 
+                        isCallEnd ? 'fa-phone-slash' : 'fa-phone';
+            
+            const callClass = isCallStart ? 'call-start' : 
+                            isCallEnd ? 'call-end' : 'call-active';
+            
             messageDiv.innerHTML = `
-                <div class="message-content">
-                    <i class="fas fa-phone"></i> ${this.escapeHtml(msg.content)}
+                <div class="message-content call-content ${callClass}">
+                    <i class="fas ${callIcon}"></i> 
+                    ${this.escapeHtml(msg.content)}
+                    ${isCallStart && !isMyMessage && !this.isInCall ? `
+                        <button class="join-call-btn" onclick="window.chatApp.answerIncomingCall()">
+                            <i class="fas fa-phone"></i> Contestar
+                        </button>
+                    ` : ''}
                 </div>
                 ${!isMyMessage ? `<div class="message-sender">${this.escapeHtml(msg.senderName)}</div>` : ''}
             `;
         } else {
             messageDiv.className = isMyMessage ? 'message my-message' : 'message other-message';
             
-            // En grupos, SIEMPRE mostrar el nombre del remitente para evitar confusión
-            const showSender = this.selectedGroup || !isMyMessage;
+            const showSender = this.selectedGroup && !isMyMessage;
             
             messageDiv.innerHTML = `
                 <div class="message-content">${this.escapeHtml(msg.content)}</div>
@@ -571,6 +839,240 @@ class ChatApp {
         }
     }
 
+    // ========== FUNCIONALIDADES DE LLAMADA ==========
+
+    async startVoiceCall(targetUserId = null) {
+        const callTargetId = targetUserId || (this.selectedContact ? this.selectedContact.id : null);
+        
+        if (!callTargetId) {
+            alert("Selecciona un contacto para llamar");
+            return;
+        }
+
+        if (this.isInCall) {
+            alert("Ya estás en una llamada");
+            return;
+        }
+
+        try {
+            console.log(` Iniciando llamada WebRTC con usuario: ${callTargetId}`);
+            
+            // Iniciar llamada en el servidor
+            await this.chatService.startVoiceCall(this.currentUser.id, callTargetId);
+            
+            // Configurar WebRTC
+            await this.setupWebRTCAsCaller(callTargetId);
+            
+            this.showNotification("Llamada iniciada", "success");
+
+        } catch (error) {
+            console.error(" Error iniciando llamada:", error);
+            alert("Error al iniciar la llamada: " + error.message);
+        }
+    }
+
+    async setupWebRTCAsCaller(targetUserId) {
+        try {
+            // Obtener stream de audio
+            this.localStream = await navigator.mediaDevices.getUserMedia({ 
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true
+                },
+                video: false
+            });
+
+            // Crear conexión peer
+            this.peerConnection = new RTCPeerConnection(this.rtcConfiguration);
+
+            // Agregar stream local
+            this.localStream.getTracks().forEach(track => {
+                this.peerConnection.addTrack(track, this.localStream);
+            });
+
+            // Manejar stream remoto
+            this.peerConnection.ontrack = (event) => {
+                console.log(" Stream remoto recibido");
+                this.remoteStream = event.streams[0];
+                this.setupRemoteAudio();
+            };
+
+            // Manejar candidatos ICE
+            this.peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    this.sendWebRTCSignal(targetUserId, {
+                        type: 'ice-candidate',
+                        candidate: event.candidate
+                    });
+                }
+            };
+
+            // Crear oferta
+            const offer = await this.peerConnection.createOffer();
+            await this.peerConnection.setLocalDescription(offer);
+
+            // Enviar oferta al receptor
+            this.sendWebRTCSignal(targetUserId, {
+                type: 'offer',
+                offer: offer
+            });
+
+            this.isInCall = true;
+            this.currentCall = {
+                targetId: targetUserId,
+                startTime: new Date(),
+                isCaller: true
+            };
+
+            this.showCallInterface();
+
+        } catch (error) {
+            console.error("Error configurando WebRTC:", error);
+            throw error;
+        }
+    }
+
+    setupRemoteAudio() {
+        const remoteAudio = document.getElementById('remoteAudio');
+        if (remoteAudio && this.remoteStream) {
+            remoteAudio.srcObject = this.remoteStream;
+            remoteAudio.play().catch(e => console.error("Error reproduciendo audio remoto:", e));
+        }
+    }
+
+    sendWebRTCSignal(targetUserId, signal) {
+        this.chatService.sendWebRTCSignal(
+            this.currentUser.id,
+            targetUserId,
+            JSON.stringify(signal)
+        );
+    }
+
+    sendWebRTCAnswer(targetUserId, signal) {
+        this.chatService.sendWebRTCAnswer(
+            this.currentUser.id,
+            targetUserId,
+            JSON.stringify(signal)
+        );
+    }
+
+    async endVoiceCall() {
+        if (!this.isInCall) return;
+
+        try {
+            console.log(" Finalizando llamada...");
+            
+            await this.chatService.endVoiceCall(this.currentUser.id);
+            
+            // Cerrar conexión WebRTC
+            if (this.peerConnection) {
+                this.peerConnection.close();
+                this.peerConnection = null;
+            }
+
+            // Detener streams
+            if (this.localStream) {
+                this.localStream.getTracks().forEach(track => track.stop());
+                this.localStream = null;
+            }
+
+            if (this.remoteStream) {
+                this.remoteStream.getTracks().forEach(track => track.stop());
+                this.remoteStream = null;
+            }
+
+            this.hideCallInterface();
+            this.showNotification("Llamada finalizada", "info");
+            
+            console.log(" Llamada finalizada exitosamente");
+
+        } catch (error) {
+            console.error(" Error finalizando llamada:", error);
+            alert("Error al finalizar la llamada: " + error.message);
+        }
+    }
+
+    showCallInterface() {
+        const callInterface = document.createElement('div');
+        callInterface.id = 'callInterface';
+        callInterface.className = 'call-interface active';
+        
+        const targetUser = this.selectedContact || { username: 'Usuario' };
+        
+        callInterface.innerHTML = `
+            <div class="call-container">
+                <div class="call-header">
+                    <div class="call-avatar">
+                        <i class="fas fa-user"></i>
+                    </div>
+                    <div class="call-info">
+                        <h3>En llamada con ${this.escapeHtml(targetUser.username)}</h3>
+                        <div class="call-timer">00:00</div>
+                        <div class="call-status">Llamada en curso...</div>
+                    </div>
+                </div>
+                <div class="call-controls">
+                    <button class="call-control-btn hangup-btn" onclick="window.chatApp.endVoiceCall()">
+                        <i class="fas fa-phone-slash"></i>
+                    </button>
+                </div>
+                <audio id="remoteAudio" autoplay playsinline></audio>
+                <audio id="localAudio" muted autoplay playsinline></audio>
+            </div>
+        `;
+
+        document.body.appendChild(callInterface);
+
+        // Configurar audio local (solo para eco)
+        const localAudio = document.getElementById('localAudio');
+        if (localAudio && this.localStream) {
+            localAudio.srcObject = this.localStream;
+        }
+
+        // Iniciar temporizador
+        this.callStartTime = new Date();
+        this.callDurationInterval = setInterval(() => {
+            this.updateCallTimer();
+        }, 1000);
+
+        this.updateUsers();
+    }
+
+    hideCallInterface() {
+        const callInterface = document.getElementById('callInterface');
+        if (callInterface) {
+            callInterface.remove();
+        }
+
+        if (this.callDurationInterval) {
+            clearInterval(this.callDurationInterval);
+            this.callDurationInterval = null;
+        }
+
+        this.isInCall = false;
+        this.currentCall = null;
+        this.callStartTime = null;
+
+        // Actualizar lista de contactos para habilitar botones de llamada
+        this.updateUsers();
+    }
+
+    updateCallTimer() {
+        if (!this.callStartTime) return;
+
+        const now = new Date();
+        const diff = Math.floor((now - this.callStartTime) / 1000);
+        const minutes = Math.floor(diff / 60).toString().padStart(2, '0');
+        const seconds = (diff % 60).toString().padStart(2, '0');
+        
+        const timerElement = document.querySelector('.call-timer');
+        if (timerElement) {
+            timerElement.textContent = `${minutes}:${seconds}`;
+        }
+    }
+
+
     selectContact(user) {
         this.selectedContact = user;
         this.selectedGroup = null; // ← Deseleccionar grupo
@@ -594,20 +1096,30 @@ class ChatApp {
     updateChatHeader(title, subtitle) {
         const headerInfo = this.chatHeader.querySelector('.chat-header-info');
         
-        // Si hay un contacto seleccionado, agregar botón para volver al chat general
-        const backButton = this.selectedContact ? `
+        const backButton = (this.selectedContact || this.selectedGroup) ? `
             <button class="icon-btn back-btn" title="Volver al chat general" onclick="window.chatApp.backToGeneralChat()">
                 <i class="fas fa-arrow-left"></i>
+            </button>
+        ` : '';
+        
+        // Botón de llamada solo si hay contacto seleccionado y no estamos en llamada
+        const callButton = (this.selectedContact && !this.isInCall) ? `
+            <button class="icon-btn call-btn" title="Llamar" onclick="window.chatApp.startVoiceCall()">
+                <i class="fas fa-phone"></i>
             </button>
         ` : '';
         
         headerInfo.innerHTML = `
             ${backButton}
             <div class="chat-header-text">
-                <h2 class="chat-title">${title}</h2>
+                <h2 class="chat-title">${this.escapeHtml(title)}</h2>
                 <span class="chat-subtitle">${subtitle}</span>
             </div>
         `;
+
+        // Actualizar área de acciones del header
+        const chatActions = this.chatHeader.querySelector('.chat-actions');
+        chatActions.innerHTML = callButton;
     }
 
     backToGeneralChat() {
@@ -661,6 +1173,11 @@ class ChatApp {
     }
 
     async disconnect() {
+        // Finalizar llamada si está activa
+        if (this.isInCall) {
+            await this.endVoiceCall();
+        }
+
         if (this.pollInterval) {
             clearInterval(this.pollInterval);
         }
@@ -679,122 +1196,6 @@ class ChatApp {
         }
     }
 }
-
-// Añadir estilos adicionales
-const style = document.createElement('style');
-style.textContent = `
-    .system-message {
-        align-self: center;
-        margin: 10px 0;
-    }
-    .system-message-content {
-        background: var(--bg-card);
-        color: var(--text-muted);
-        padding: 8px 16px;
-        border-radius: 20px;
-        font-size: 0.85rem;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-    .system-message-content i {
-        color: var(--secondary);
-    }
-    
-    .member-badge {
-        display: inline-block;
-        background: var(--secondary);
-        color: white;
-        padding: 2px 8px;
-        border-radius: 12px;
-        font-size: 0.7rem;
-        margin-left: 8px;
-        font-weight: 600;
-    }
-    
-    .btn-secondary {
-        flex: 1;
-        padding: 14px;
-        border-radius: 12px;
-        border: 1px solid var(--border);
-        background: var(--bg-input);
-        color: var(--text);
-        font-size: 1rem;
-        font-weight: 600;
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        transition: all 0.2s ease;
-    }
-    
-    .btn-secondary:hover {
-        background: var(--bg-card);
-        border-color: var(--text-muted);
-    }
-    
-    .notification {
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        background: var(--bg-card);
-        color: var(--text);
-        padding: 15px 20px;
-        border-radius: 12px;
-        border: 1px solid var(--border);
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-        transform: translateX(400px);
-        opacity: 0;
-        transition: all 0.3s ease;
-        z-index: 2000;
-        max-width: 350px;
-    }
-    
-    .notification.show {
-        transform: translateX(0);
-        opacity: 1;
-    }
-    
-    .notification-success {
-        border-color: var(--secondary);
-    }
-    
-    .notification-success i {
-        color: var(--secondary);
-    }
-    
-    .notification-info i {
-        color: var(--primary);
-    }
-    
-    .back-btn {
-        margin-right: 10px;
-    }
-    
-    .back-btn:hover {
-        transform: translateX(-2px);
-    }
-    
-    .join-modal {
-        animation: modalZoomIn 0.3s ease;
-    }
-    
-    @keyframes modalZoomIn {
-        from {
-            transform: scale(0.9);
-            opacity: 0;
-        }
-        to {
-            transform: scale(1);
-            opacity: 1;
-        }
-    }
-`;
-document.head.appendChild(style);
 
 // Inicializar la aplicación
 let app;

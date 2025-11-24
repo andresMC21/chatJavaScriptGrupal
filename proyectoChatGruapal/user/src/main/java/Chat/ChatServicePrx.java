@@ -482,6 +482,158 @@ public interface ChatServicePrx extends com.zeroc.Ice.ObjectPrx
         return f;
     }
 
+    default void answerVoiceCall(String userId)
+    {
+        answerVoiceCall(userId, com.zeroc.Ice.ObjectPrx.noExplicitContext);
+    }
+
+    default void answerVoiceCall(String userId, java.util.Map<String, String> context)
+    {
+        _iceI_answerVoiceCallAsync(userId, context, true).waitForResponse();
+    }
+
+    default java.util.concurrent.CompletableFuture<Void> answerVoiceCallAsync(String userId)
+    {
+        return _iceI_answerVoiceCallAsync(userId, com.zeroc.Ice.ObjectPrx.noExplicitContext, false);
+    }
+
+    default java.util.concurrent.CompletableFuture<Void> answerVoiceCallAsync(String userId, java.util.Map<String, String> context)
+    {
+        return _iceI_answerVoiceCallAsync(userId, context, false);
+    }
+
+    /**
+     * @hidden
+     * @param iceP_userId -
+     * @param context -
+     * @param sync -
+     * @return -
+     **/
+    default com.zeroc.IceInternal.OutgoingAsync<Void> _iceI_answerVoiceCallAsync(String iceP_userId, java.util.Map<String, String> context, boolean sync)
+    {
+        com.zeroc.IceInternal.OutgoingAsync<Void> f = new com.zeroc.IceInternal.OutgoingAsync<>(this, "answerVoiceCall", null, sync, null);
+        f.invoke(false, context, null, ostr -> {
+                     ostr.writeString(iceP_userId);
+                 }, null);
+        return f;
+    }
+
+    default void rejectVoiceCall(String userId)
+    {
+        rejectVoiceCall(userId, com.zeroc.Ice.ObjectPrx.noExplicitContext);
+    }
+
+    default void rejectVoiceCall(String userId, java.util.Map<String, String> context)
+    {
+        _iceI_rejectVoiceCallAsync(userId, context, true).waitForResponse();
+    }
+
+    default java.util.concurrent.CompletableFuture<Void> rejectVoiceCallAsync(String userId)
+    {
+        return _iceI_rejectVoiceCallAsync(userId, com.zeroc.Ice.ObjectPrx.noExplicitContext, false);
+    }
+
+    default java.util.concurrent.CompletableFuture<Void> rejectVoiceCallAsync(String userId, java.util.Map<String, String> context)
+    {
+        return _iceI_rejectVoiceCallAsync(userId, context, false);
+    }
+
+    /**
+     * @hidden
+     * @param iceP_userId -
+     * @param context -
+     * @param sync -
+     * @return -
+     **/
+    default com.zeroc.IceInternal.OutgoingAsync<Void> _iceI_rejectVoiceCallAsync(String iceP_userId, java.util.Map<String, String> context, boolean sync)
+    {
+        com.zeroc.IceInternal.OutgoingAsync<Void> f = new com.zeroc.IceInternal.OutgoingAsync<>(this, "rejectVoiceCall", null, sync, null);
+        f.invoke(false, context, null, ostr -> {
+                     ostr.writeString(iceP_userId);
+                 }, null);
+        return f;
+    }
+
+    default void sendWebRTCSignal(String userId, String targetUserId, String signalData)
+    {
+        sendWebRTCSignal(userId, targetUserId, signalData, com.zeroc.Ice.ObjectPrx.noExplicitContext);
+    }
+
+    default void sendWebRTCSignal(String userId, String targetUserId, String signalData, java.util.Map<String, String> context)
+    {
+        _iceI_sendWebRTCSignalAsync(userId, targetUserId, signalData, context, true).waitForResponse();
+    }
+
+    default java.util.concurrent.CompletableFuture<Void> sendWebRTCSignalAsync(String userId, String targetUserId, String signalData)
+    {
+        return _iceI_sendWebRTCSignalAsync(userId, targetUserId, signalData, com.zeroc.Ice.ObjectPrx.noExplicitContext, false);
+    }
+
+    default java.util.concurrent.CompletableFuture<Void> sendWebRTCSignalAsync(String userId, String targetUserId, String signalData, java.util.Map<String, String> context)
+    {
+        return _iceI_sendWebRTCSignalAsync(userId, targetUserId, signalData, context, false);
+    }
+
+    /**
+     * @hidden
+     * @param iceP_userId -
+     * @param iceP_targetUserId -
+     * @param iceP_signalData -
+     * @param context -
+     * @param sync -
+     * @return -
+     **/
+    default com.zeroc.IceInternal.OutgoingAsync<Void> _iceI_sendWebRTCSignalAsync(String iceP_userId, String iceP_targetUserId, String iceP_signalData, java.util.Map<String, String> context, boolean sync)
+    {
+        com.zeroc.IceInternal.OutgoingAsync<Void> f = new com.zeroc.IceInternal.OutgoingAsync<>(this, "sendWebRTCSignal", null, sync, null);
+        f.invoke(false, context, null, ostr -> {
+                     ostr.writeString(iceP_userId);
+                     ostr.writeString(iceP_targetUserId);
+                     ostr.writeString(iceP_signalData);
+                 }, null);
+        return f;
+    }
+
+    default void sendWebRTCAnswer(String userId, String targetUserId, String signalData)
+    {
+        sendWebRTCAnswer(userId, targetUserId, signalData, com.zeroc.Ice.ObjectPrx.noExplicitContext);
+    }
+
+    default void sendWebRTCAnswer(String userId, String targetUserId, String signalData, java.util.Map<String, String> context)
+    {
+        _iceI_sendWebRTCAnswerAsync(userId, targetUserId, signalData, context, true).waitForResponse();
+    }
+
+    default java.util.concurrent.CompletableFuture<Void> sendWebRTCAnswerAsync(String userId, String targetUserId, String signalData)
+    {
+        return _iceI_sendWebRTCAnswerAsync(userId, targetUserId, signalData, com.zeroc.Ice.ObjectPrx.noExplicitContext, false);
+    }
+
+    default java.util.concurrent.CompletableFuture<Void> sendWebRTCAnswerAsync(String userId, String targetUserId, String signalData, java.util.Map<String, String> context)
+    {
+        return _iceI_sendWebRTCAnswerAsync(userId, targetUserId, signalData, context, false);
+    }
+
+    /**
+     * @hidden
+     * @param iceP_userId -
+     * @param iceP_targetUserId -
+     * @param iceP_signalData -
+     * @param context -
+     * @param sync -
+     * @return -
+     **/
+    default com.zeroc.IceInternal.OutgoingAsync<Void> _iceI_sendWebRTCAnswerAsync(String iceP_userId, String iceP_targetUserId, String iceP_signalData, java.util.Map<String, String> context, boolean sync)
+    {
+        com.zeroc.IceInternal.OutgoingAsync<Void> f = new com.zeroc.IceInternal.OutgoingAsync<>(this, "sendWebRTCAnswer", null, sync, null);
+        f.invoke(false, context, null, ostr -> {
+                     ostr.writeString(iceP_userId);
+                     ostr.writeString(iceP_targetUserId);
+                     ostr.writeString(iceP_signalData);
+                 }, null);
+        return f;
+    }
+
     default void sendGroupMessage(String groupId, String userId, String content, MessageTypeEnum type)
     {
         sendGroupMessage(groupId, userId, content, type, com.zeroc.Ice.ObjectPrx.noExplicitContext);
