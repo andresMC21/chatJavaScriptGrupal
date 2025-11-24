@@ -17,13 +17,13 @@ class ChatApp {
         this.selectedGroup = null;
         this.userGroups = new Set(); // Grupos a los que el usuario pertenece
 
-        // Estado de llamadas
-        // Estado de llamadas WebRTC
+        // ========== ESTADO DE LLAMADAS MEJORADO ==========
         this.currentCall = null;
         this.isInCall = false;
-        this.isRinging = false; // Para llamadas entrantes
+        this.isRinging = false;
         this.callDurationInterval = null;
         this.callStartTime = null;
+        this.incomingCall = null;
         
         // WebRTC
         this.localStream = null;
@@ -36,6 +36,15 @@ class ChatApp {
             ]
         };
 
+        // ========== TRACKING DE SEÑALES PROCESADAS ==========
+        this.processedSignals = new Set(); // Para evitar procesar señales duplicadas
+        this.lastSignalCheck = 0; // Timestamp de última revisión
+        
+        // Ringtone
+        this.ringtoneAudio = null;
+        this.audioContext = null;
+       
+
         // Referencias DOM
         this.messagesContainer = document.getElementById('messages');
         this.contactsList = document.getElementById('contacts');
@@ -44,6 +53,7 @@ class ChatApp {
         this.chatHeader = document.getElementById('chatHeader');
 
         this.initializeEventListeners();
+         
     }
 
     initializeEventListeners() {
@@ -189,6 +199,76 @@ class ChatApp {
 
     }
 
+    // ========== MÉTODO MEJORADO: PROCESAR SEÑALES WEBRTC ==========
+    async processWebRTCSignals(messages) {
+        const now = Date.now();
+        
+        // Filtrar solo mensajes de tipo VOICECALL que no hemos procesado
+        const signals = messages.filter(msg => 
+            msg.type.value === ChatUI.MessageTypeEnum.VOICECALL.value &&
+            msg.senderId !== this.currentUser.id &&
+            (msg.content.includes('WEBRTC_SIGNAL:') || msg.content.includes('WEBRTC_ANSWER:')) &&
+            !this.processedSignals.has(msg.id)
+        );
+
+        for (const msg of signals) {
+            try {
+                // Marcar como procesado
+                this.processedSignals.add(msg.id);
+
+                if (msg.content.includes('WEBRTC_SIGNAL:')) {
+                    const signalData = msg.content.replace('WEBRTC_SIGNAL:', '');
+                    await this.handleIncomingSignal(msg.senderId, msg.senderName, signalData);
+                } 
+                else if (msg.content.includes('WEBRTC_ANSWER:')) {
+                    const signalData = msg.content.replace('WEBRTC_ANSWER:', '');
+                    await this.handleWebRTCAnswer(signalData);
+                }
+            } catch (error) {
+                console.error("❌ Error procesando señal WebRTC:", error);
+            }
+        }
+
+        // Limpiar señales antiguas (más de 30 segundos)
+        if (now - this.lastSignalCheck > 30000) {
+            this.processedSignals.clear();
+            this.lastSignalCheck = now;
+        }
+    }
+
+    // ==========  MANEJAR SEÑALES ENTRANTES ==========
+    async handleIncomingSignal(senderId, senderName, signalData) {
+        try {
+            const signal = JSON.parse(signalData);
+            
+            if (signal.type === 'offer') {
+                // Solo procesar si no estamos en llamada y no tenemos una llamada entrante
+                if (this.isInCall || this.incomingCall) {
+                    console.log("⚠ Ya en llamada o llamada entrante existente, ignorando");
+                    return;
+                }
+
+                this.incomingCall = {
+                    callerId: senderId,
+                    callerName: senderName,
+                    offer: signal.offer
+                };
+
+                console.log(" Llamada entrante de:", senderName);
+                this.showIncomingCallInterface(senderName);
+            } 
+            else if (signal.type === 'ice-candidate') {
+                // Procesar candidato ICE
+                if (this.peerConnection) {
+                    await this.peerConnection.addIceCandidate(signal.candidate);
+                    console.log(" Candidato ICE agregado (desde offer)");
+                }
+            }
+        } catch (error) {
+            console.error(" Error manejando señal entrante:", error);
+        }
+    }
+
     async updateMessages() {
         try {
             let messages;
@@ -232,17 +312,26 @@ class ChatApp {
         });
     }
 
-
-
     async handleWebRTCAnswer(signalData) {
-        if (!this.peerConnection) return;
+        if (!this.peerConnection) {
+            console.log(" No hay conexión peer, ignorando respuesta");
+            return;
+        }
 
-        const signal = JSON.parse(signalData);
-        
-        if (signal.type === 'answer') {
-            await this.peerConnection.setRemoteDescription(signal.answer);
-        } else if (signal.type === 'ice-candidate') {
-            await this.peerConnection.addIceCandidate(signal.candidate);
+        try {
+            const signal = JSON.parse(signalData);
+            
+            if (signal.type === 'answer') {
+                console.log(" Recibida respuesta WebRTC del receptor");
+                await this.peerConnection.setRemoteDescription(signal.answer);
+                this.showNotification("Llamada conectada", "success");
+            } 
+            else if (signal.type === 'ice-candidate') {
+                await this.peerConnection.addIceCandidate(signal.candidate);
+                console.log(" Candidato ICE agregado (desde answer)");
+            }
+        } catch (error) {
+            console.error(" Error manejando respuesta WebRTC:", error);
         }
     }
 
@@ -299,16 +388,22 @@ class ChatApp {
     }
 
     async answerIncomingCall() {
-        if (!this.incomingCall) return;
+        if (!this.incomingCall) {
+            console.log(" No hay llamada entrante para contestar");
+            return;
+        }
 
         try {
-            // Ocultar interfaz de llamada entrante
+            console.log(" Contestando llamada de:", this.incomingCall.callerName);
+            
+            // 1. Ocultar interfaz de llamada entrante
             this.hideIncomingCallInterface();
 
-            // Notificar al servidor que contestamos la llamada
+            // 2. Notificar al servidor
             await this.chatService.answerVoiceCall(this.currentUser.id);
 
-            // Obtener stream de audio
+            // 3. Obtener permisos de audio
+            console.log(" Solicitando permisos de micrófono...");
             this.localStream = await navigator.mediaDevices.getUserMedia({ 
                 audio: {
                     echoCancellation: true,
@@ -318,22 +413,22 @@ class ChatApp {
                 video: false
             });
 
-            // Crear conexión peer
+            // 4. Crear conexión peer
             this.peerConnection = new RTCPeerConnection(this.rtcConfiguration);
 
-            // Agregar stream local
+            // 5. Agregar tracks locales
             this.localStream.getTracks().forEach(track => {
                 this.peerConnection.addTrack(track, this.localStream);
             });
 
-            // Manejar stream remoto
+            // 6. Manejar stream remoto
             this.peerConnection.ontrack = (event) => {
                 console.log(" Stream remoto recibido");
                 this.remoteStream = event.streams[0];
-                this.setupRemoteAudio();
+                setTimeout(() => this.setupRemoteAudio(), 500);
             };
 
-            // Manejar candidatos ICE
+            // 7. Manejar candidatos ICE
             this.peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
                     this.sendWebRTCAnswer(this.incomingCall.callerId, {
@@ -343,32 +438,73 @@ class ChatApp {
                 }
             };
 
-            // Establecer oferta remota
+            // 8. Establecer oferta remota
             await this.peerConnection.setRemoteDescription(this.incomingCall.offer);
 
-            // Crear respuesta
+            // 9. Crear respuesta
             const answer = await this.peerConnection.createAnswer();
             await this.peerConnection.setLocalDescription(answer);
 
-            // Enviar respuesta
+            // 10. Enviar respuesta
             this.sendWebRTCAnswer(this.incomingCall.callerId, {
                 type: 'answer',
                 answer: answer
             });
 
+            // 11. Actualizar estado
             this.isInCall = true;
             this.currentCall = {
                 targetId: this.incomingCall.callerId,
+                targetName: this.incomingCall.callerName,
                 startTime: new Date(),
                 isCaller: false
             };
 
+            // 12. Mostrar interfaz de llamada activa
             this.showCallInterface();
             this.incomingCall = null;
 
+            console.log(" Llamada contestada exitosamente");
+
         } catch (error) {
-            console.error("Error contestando llamada:", error);
-            alert("Error al contestar la llamada");
+            console.error(" Error contestando llamada:", error);
+            alert("Error al contestar la llamada: " + error.message);
+            await this.cleanupCallState();
+        }
+    }
+
+    setupRemoteAudio() {
+        const remoteAudio = document.getElementById('remoteAudio');
+        
+        if (!remoteAudio) {
+            console.error(" Elemento remoteAudio no encontrado en el DOM");
+            return;
+        }
+
+        if (!this.remoteStream) {
+            console.error(" No hay stream remoto disponible");
+            return;
+        }
+
+        try {
+            remoteAudio.srcObject = this.remoteStream;
+            remoteAudio.volume = 1.0; // Volumen máximo
+            
+            // Reproducir con manejo de errores
+            remoteAudio.play()
+                .then(() => {
+                    console.log(" Audio remoto reproduciendo");
+                })
+                .catch(error => {
+                    console.error(" Error reproduciendo audio remoto:", error);
+                    
+                    // Reintentar después de interacción del usuario
+                    document.addEventListener('click', () => {
+                        remoteAudio.play();
+                    }, { once: true });
+                });
+        } catch (error) {
+            console.error(" Error configurando audio remoto:", error);
         }
     }
 
@@ -376,11 +512,15 @@ class ChatApp {
         if (!this.incomingCall) return;
 
         try {
+            console.log(" Rechazando llamada de:", this.incomingCall.callerName);
+            
             await this.chatService.rejectVoiceCall(this.currentUser.id);
             this.hideIncomingCallInterface();
             this.incomingCall = null;
+            
+            this.showNotification("Llamada rechazada", "info");
         } catch (error) {
-            console.error("Error rechazando llamada:", error);
+            console.error(" Error rechazando llamada:", error);
         }
     }
 
@@ -393,33 +533,52 @@ class ChatApp {
     }
 
     playRingtone() {
-        // Crear un tono de llamada simple (puedes reemplazar con un archivo de audio)
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        const oscillator = audioContext.createOscillator();
-        const gainNode = audioContext.createGain();
-        
-        oscillator.connect(gainNode);
-        gainNode.connect(audioContext.destination);
-        
-        oscillator.type = 'sine';
-        oscillator.frequency.value = 800;
-        gainNode.gain.value = 0.5;
-        
-        oscillator.start();
-        
-        // Detener después de 1 segundo y repetir
-        setInterval(() => {
-            oscillator.stop();
+        try {
+            if (!this.audioContext) {
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+
+            const oscillator = this.audioContext.createOscillator();
+            const gainNode = this.audioContext.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(this.audioContext.destination);
+            
+            oscillator.type = 'sine';
+            oscillator.frequency.value = 800;
+            gainNode.gain.value = 0.3;
+            
             oscillator.start();
-        }, 1000);
-        
-        this.ringtone = oscillator;
+            
+            // Patrón de timbre (1 segundo on, 2 segundos off)
+            this.ringtoneInterval = setInterval(() => {
+                oscillator.stop();
+                const newOsc = this.audioContext.createOscillator();
+                newOsc.connect(gainNode);
+                newOsc.type = 'sine';
+                newOsc.frequency.value = 800;
+                newOsc.start();
+                
+                setTimeout(() => newOsc.stop(), 1000);
+            }, 3000);
+            
+            this.ringtone = oscillator;
+        } catch (error) {
+            console.error(" Error reproduciendo tono:", error);
+        }
     }
 
     stopRingtone() {
         if (this.ringtone) {
-            this.ringtone.stop();
+            try {
+                this.ringtone.stop();
+            } catch (e) {}
             this.ringtone = null;
+        }
+        
+        if (this.ringtoneInterval) {
+            clearInterval(this.ringtoneInterval);
+            this.ringtoneInterval = null;
         }
     }
 
@@ -855,25 +1014,35 @@ class ChatApp {
         }
 
         try {
-            console.log(` Iniciando llamada WebRTC con usuario: ${callTargetId}`);
+            console.log(" Iniciando llamada WebRTC con usuario:", callTargetId);
             
-            // Iniciar llamada en el servidor
+            // 1. Notificar al servidor
             await this.chatService.startVoiceCall(this.currentUser.id, callTargetId);
             
-            // Configurar WebRTC
+            // 2. Obtener permisos y configurar WebRTC
             await this.setupWebRTCAsCaller(callTargetId);
             
             this.showNotification("Llamada iniciada", "success");
 
         } catch (error) {
             console.error(" Error iniciando llamada:", error);
-            alert("Error al iniciar la llamada: " + error.message);
+            
+            // Manejar error de permisos
+            if (error.name === 'NotAllowedError') {
+                alert("Debes permitir el acceso al micrófono para hacer llamadas");
+            } else {
+                alert("Error al iniciar la llamada: " + error.message);
+            }
+            
+            // Limpiar estado
+            await this.cleanupCallState();
         }
     }
 
     async setupWebRTCAsCaller(targetUserId) {
         try {
-            // Obtener stream de audio
+            // 1. Solicitar permisos de audio
+            console.log(" Solicitando permisos de micrófono...");
             this.localStream = await navigator.mediaDevices.getUserMedia({ 
                 audio: {
                     echoCancellation: true,
@@ -882,25 +1051,33 @@ class ChatApp {
                 },
                 video: false
             });
+            console.log(" Permisos concedidos");
 
-            // Crear conexión peer
+            // 2. Crear conexión peer
             this.peerConnection = new RTCPeerConnection(this.rtcConfiguration);
+            console.log(" Conexión peer creada");
 
-            // Agregar stream local
+            // 3. Agregar tracks locales
             this.localStream.getTracks().forEach(track => {
                 this.peerConnection.addTrack(track, this.localStream);
+                console.log(" Track local agregado:", track.kind);
             });
 
-            // Manejar stream remoto
+            // 4. Manejar stream remoto
             this.peerConnection.ontrack = (event) => {
                 console.log(" Stream remoto recibido");
                 this.remoteStream = event.streams[0];
-                this.setupRemoteAudio();
+                
+                // CRÍTICO: Esperar a que la interfaz esté lista
+                setTimeout(() => {
+                    this.setupRemoteAudio();
+                }, 500);
             };
 
-            // Manejar candidatos ICE
+            // 5. Manejar candidatos ICE
             this.peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
+                    console.log(" Enviando candidato ICE");
                     this.sendWebRTCSignal(targetUserId, {
                         type: 'ice-candidate',
                         candidate: event.candidate
@@ -908,16 +1085,28 @@ class ChatApp {
                 }
             };
 
-            // Crear oferta
+            // 6. Manejar estado de conexión
+            this.peerConnection.onconnectionstatechange = () => {
+                console.log(" Estado de conexión:", this.peerConnection.connectionState);
+                
+                if (this.peerConnection.connectionState === 'failed') {
+                    console.error(" Conexión WebRTC falló");
+                    alert("La conexión de llamada falló. Intentando reconectar...");
+                }
+            };
+
+            // 7. Crear y enviar oferta
+            console.log(" Creando oferta WebRTC...");
             const offer = await this.peerConnection.createOffer();
             await this.peerConnection.setLocalDescription(offer);
 
-            // Enviar oferta al receptor
             this.sendWebRTCSignal(targetUserId, {
                 type: 'offer',
                 offer: offer
             });
+            console.log(" Oferta enviada");
 
+            // 8. Actualizar estado
             this.isInCall = true;
             this.currentCall = {
                 targetId: targetUserId,
@@ -925,10 +1114,11 @@ class ChatApp {
                 isCaller: true
             };
 
+            // 9. Mostrar interfaz
             this.showCallInterface();
 
         } catch (error) {
-            console.error("Error configurando WebRTC:", error);
+            console.error(" Error configurando WebRTC:", error);
             throw error;
         }
     }
@@ -957,48 +1147,77 @@ class ChatApp {
         );
     }
 
-    async endVoiceCall() {
-        if (!this.isInCall) return;
+     async endVoiceCall() {
+        if (!this.isInCall) {
+            console.log(" No hay llamada activa para finalizar");
+            return;
+        }
 
         try {
             console.log(" Finalizando llamada...");
             
+            // 1. Notificar al servidor
             await this.chatService.endVoiceCall(this.currentUser.id);
             
-            // Cerrar conexión WebRTC
-            if (this.peerConnection) {
-                this.peerConnection.close();
-                this.peerConnection = null;
-            }
-
-            // Detener streams
-            if (this.localStream) {
-                this.localStream.getTracks().forEach(track => track.stop());
-                this.localStream = null;
-            }
-
-            if (this.remoteStream) {
-                this.remoteStream.getTracks().forEach(track => track.stop());
-                this.remoteStream = null;
-            }
-
-            this.hideCallInterface();
-            this.showNotification("Llamada finalizada", "info");
+            // 2. Limpiar estado
+            await this.cleanupCallState();
             
+            this.showNotification("Llamada finalizada", "info");
             console.log(" Llamada finalizada exitosamente");
 
         } catch (error) {
             console.error(" Error finalizando llamada:", error);
-            alert("Error al finalizar la llamada: " + error.message);
+            // Limpiar de todos modos
+            await this.cleanupCallState();
         }
     }
 
+     async cleanupCallState() {
+        console.log(" Limpiando estado de llamada...");
+
+        // Cerrar conexión WebRTC
+        if (this.peerConnection) {
+            this.peerConnection.close();
+            this.peerConnection = null;
+        }
+
+        // Detener streams
+        if (this.localStream) {
+            this.localStream.getTracks().forEach(track => {
+                track.stop();
+                console.log(" Track local detenido:", track.kind);
+            });
+            this.localStream = null;
+        }
+
+        if (this.remoteStream) {
+            this.remoteStream.getTracks().forEach(track => track.stop());
+            this.remoteStream = null;
+        }
+
+        // Resetear estado
+        this.isInCall = false;
+        this.currentCall = null;
+        this.callStartTime = null;
+
+        // Ocultar interfaz
+        this.hideCallInterface();
+        
+        // Actualizar contactos
+        await this.updateUsers();
+    }
+
     showCallInterface() {
+        // Remover interfaz existente si hay
+        const existing = document.getElementById('callInterface');
+        if (existing) existing.remove();
+
         const callInterface = document.createElement('div');
         callInterface.id = 'callInterface';
         callInterface.className = 'call-interface active';
         
-        const targetUser = this.selectedContact || { username: 'Usuario' };
+        const targetName = this.currentCall.targetName || 
+                          (this.selectedContact ? this.selectedContact.username : 'Usuario');
         
         callInterface.innerHTML = `
             <div class="call-container">
@@ -1007,7 +1226,7 @@ class ChatApp {
                         <i class="fas fa-user"></i>
                     </div>
                     <div class="call-info">
-                        <h3>En llamada con ${this.escapeHtml(targetUser.username)}</h3>
+                        <h3>En llamada con ${this.escapeHtml(targetName)}</h3>
                         <div class="call-timer">00:00</div>
                         <div class="call-status">Llamada en curso...</div>
                     </div>
@@ -1017,26 +1236,24 @@ class ChatApp {
                         <i class="fas fa-phone-slash"></i>
                     </button>
                 </div>
-                <audio id="remoteAudio" autoplay playsinline></audio>
-                <audio id="localAudio" muted autoplay playsinline></audio>
             </div>
+            <audio id="remoteAudio" autoplay playsinline></audio>
         `;
 
         document.body.appendChild(callInterface);
 
-        // Configurar audio local (solo para eco)
-        const localAudio = document.getElementById('localAudio');
-        if (localAudio && this.localStream) {
-            localAudio.srcObject = this.localStream;
-        }
+        // CRÍTICO: Configurar audio después de agregar al DOM
+        setTimeout(() => {
+            if (this.remoteStream) {
+                this.setupRemoteAudio();
+            }
+        }, 100);
 
         // Iniciar temporizador
         this.callStartTime = new Date();
         this.callDurationInterval = setInterval(() => {
             this.updateCallTimer();
         }, 1000);
-
-        this.updateUsers();
     }
 
     hideCallInterface() {
@@ -1215,5 +1432,12 @@ window.addEventListener('DOMContentLoaded', async () => {
 window.addEventListener('beforeunload', () => {
     if (app) {
         app.disconnect();
+    }
+});
+
+// Al cerrar la página, limpiar llamadas
+window.addEventListener('beforeunload', () => {
+    if (app && app.isInCall) {
+        app.endVoiceCall();
     }
 });
