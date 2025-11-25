@@ -1,7 +1,6 @@
 package model;
 
 import Chat.MessageDTO;
-import Chat.MessageTypeEnum;
 
 public class Message {
     private String id;

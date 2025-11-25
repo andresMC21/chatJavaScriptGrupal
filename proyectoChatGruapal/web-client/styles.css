@@ -203,6 +203,22 @@ body {
 .voice-duration { font-size: 0.8rem; color: var(--text-muted); }
 .my-message .voice-duration { color: rgba(255,255,255,0.7); }
 
+/*AUDIO MESSAGES*/
+.audio-message { padding: 0; }
+.audio-message audio { 
+    width: 100%; 
+    min-width: 250px; 
+    max-width: 300px; 
+    height: 40px;
+    outline: none;
+}
+.audio-message audio::-webkit-media-controls-panel {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+.my-message .audio-message audio::-webkit-media-controls-panel {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
 /* COMPOSER (INPUT) AREA*/
 .composer { padding: 16px 24px; border-top: 1px solid var(--border); background: var(--bg-card); }
 .input-container { display: flex; align-items: center; gap: 12px; background: var(--bg-input); padding: 8px; border-radius: 16px; }

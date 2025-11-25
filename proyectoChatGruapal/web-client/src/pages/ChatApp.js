@@ -9,6 +9,12 @@ const ChatUI = {
 
 class ChatApp {
     constructor() {
+        // Prevenir múltiples inicializaciones
+        if (window.chatAppInstance) {
+            console.warn("ChatApp ya está inicializado, reutilizando instancia existente");
+            return window.chatAppInstance;
+        }
+
         this.communicator = null;
         this.chatService = null;
         this.currentUser = null;
@@ -17,6 +23,8 @@ class ChatApp {
         this.selectedGroup = null;
         this.userGroups = new Set(); // Grupos a los que el usuario pertenece
 
+        // Flag para prevenir múltiples envíos simultáneos
+        this.isSendingAudio = false;
 
         // Referencias DOM
         this.messagesContainer = document.getElementById('messages');
@@ -30,9 +38,21 @@ class ChatApp {
         this.isRecording = false;
 
         this.initializeEventListeners();
+        
+        // Guardar instancia global
+        window.chatAppInstance = this;
     }
 
     initializeEventListeners() {
+        // Remover listeners previos si existen para evitar duplicados
+        const newSendBtn = this.sendBtn.cloneNode(true);
+        this.sendBtn.parentNode.replaceChild(newSendBtn, this.sendBtn);
+        this.sendBtn = newSendBtn;
+
+        const newMessageInput = this.messageInput.cloneNode(true);
+        this.messageInput.parentNode.replaceChild(newMessageInput, this.messageInput);
+        this.messageInput = newMessageInput;
+
         this.sendBtn.addEventListener('click', () => this.sendMessage());
         this.messageInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') this.sendMessage();
@@ -40,16 +60,24 @@ class ChatApp {
 
         // Botón iniciar grabación
         const micBtn = document.querySelector('.mic-btn');
-        micBtn.addEventListener('click', () => this.startRecording());
+        if (micBtn && !micBtn.dataset.listenerAdded) {
+            micBtn.addEventListener('click', () => this.startRecording());
+            micBtn.dataset.listenerAdded = 'true';
+        }
 
         // Botón cancelar grabación
         const cancelAudioBtn = document.querySelector('#recordingInput .cancel-btn');
-        cancelAudioBtn.addEventListener('click', () => this.cancelRecording());
+        if (cancelAudioBtn && !cancelAudioBtn.dataset.listenerAdded) {
+            cancelAudioBtn.addEventListener('click', () => this.cancelRecording());
+            cancelAudioBtn.dataset.listenerAdded = 'true';
+        }
 
         // Botón enviar audio
         const sendAudioBtn = document.querySelector('#recordingInput .send-btn');
-        sendAudioBtn.addEventListener('click', () => this.sendAudioMessage());
-
+        if (sendAudioBtn && !sendAudioBtn.dataset.listenerAdded) {
+            sendAudioBtn.addEventListener('click', () => this.sendAudioMessage());
+            sendAudioBtn.dataset.listenerAdded = 'true';
+        }
     }
 
     async connect() {
@@ -616,11 +644,21 @@ class ChatApp {
                 }
             };
 
+            this.mediaRecorder.onstop = () => {
+                // Este handler se sobrescribirá en sendAudioMessage si es necesario
+                console.log("Grabación detenida");
+            };
+
             this.mediaRecorder.start();
+            
+            // Mostrar la interfaz de grabación
+            this.showRecordingInterface();
+            
             console.log("Grabación iniciada...");
         } catch (e) {
             console.error("Error iniciando grabación:", e);
             alert("No se pudo acceder al micrófono");
+            this.isRecording = false;
         }
     }
 
@@ -631,71 +669,225 @@ class ChatApp {
             this.mediaRecorder.stop();
         } catch { }
 
+        // Cerrar el stream de medios
+        if (this.mediaRecorder && this.mediaRecorder.stream) {
+            this.mediaRecorder.stream.getTracks().forEach(track => track.stop());
+        }
+
         this.isRecording = false;
         this.audioChunks = [];
+        this.mediaRecorder = null;
+        this.hideRecordingInterface();
         console.log("Grabación cancelada");
     }
 
+    hideRecordingInterface() {
+        const recordingInput = document.getElementById('recordingInput');
+        const normalInput = document.getElementById('normalInput');
+        if (recordingInput) recordingInput.style.display = 'none';
+        if (normalInput) normalInput.style.display = 'flex';
+    }
+
+    showRecordingInterface() {
+        const recordingInput = document.getElementById('recordingInput');
+        const normalInput = document.getElementById('normalInput');
+        if (recordingInput) recordingInput.style.display = 'flex';
+        if (normalInput) normalInput.style.display = 'none';
+    }
+
     async sendAudioMessage() {
+        // Prevenir múltiples envíos simultáneos
+        if (this.isSendingAudio) {
+            console.warn("Ya hay un envío de audio en proceso, ignorando...");
+            return;
+        }
+
+        console.log("sendAudioMessage llamado - currentUser:", this.currentUser);
+        console.log("sendAudioMessage - selectedContact:", this.selectedContact);
+        console.log("sendAudioMessage - selectedGroup:", this.selectedGroup);
+        
+        // Verificar que el chatService esté disponible
+        if (!this.chatService) {
+            console.error("ChatService no disponible");
+            alert("No se pudo enviar el mensaje de audio: Servicio no disponible");
+            this.hideRecordingInterface();
+            return;
+        }
+
+        // Verificar que el usuario esté conectado
+        if (!this.currentUser || !this.currentUser.id) {
+            console.error("Usuario no conectado, no se puede enviar audio. currentUser:", this.currentUser);
+            alert("No se pudo enviar el mensaje de audio: Debes estar conectado primero");
+            this.hideRecordingInterface();
+            return;
+        }
+
+        // Marcar como enviando
+        this.isSendingAudio = true;
 
         if (!this.mediaRecorder) {
             console.warn("No se ha iniciado una grabación");
+            alert("No se pudo enviar el mensaje de audio: No hay grabación activa");
+            this.hideRecordingInterface();
             return;
         }
 
-        // Forzar finalización de grabación ANTES de intentar enviar
-        if (this.isRecording) {
-            await new Promise(resolve => {
-                this.mediaRecorder.onstop = resolve;
-                try { this.mediaRecorder.stop(); } catch { }
-            });
-        }
-
-        if (this.audioChunks.length === 0) {
-            console.warn("No hay audio para enviar");
+        if (!this.isRecording && (!this.audioChunks || this.audioChunks.length === 0)) {
+            console.warn("No hay grabación activa ni datos de audio");
+            alert("No se pudo enviar el mensaje de audio: No hay grabación activa");
+            this.hideRecordingInterface();
             return;
         }
-
-
 
         try {
-            this.mediaRecorder.stop();
+            // Detener la grabación y esperar a que termine
+            await new Promise((resolve, reject) => {
+                // Guardar el handler original si existe
+                const originalOnStop = this.mediaRecorder.onstop;
+                
+                this.mediaRecorder.onstop = () => {
+                    try {
+                        // Restaurar el handler original si existía
+                        if (originalOnStop) {
+                            originalOnStop();
+                        }
+                        resolve();
+                    } catch (e) {
+                        reject(e);
+                    }
+                };
 
+                this.mediaRecorder.onerror = (event) => {
+                    reject(new Error("Error en MediaRecorder: " + event.error));
+                };
+
+                try {
+                    if (this.mediaRecorder.state === 'recording') {
+                        this.mediaRecorder.stop();
+                    } else {
+                        // Si ya está detenido, resolver inmediatamente
+                        resolve();
+                    }
+                } catch (e) {
+                    reject(e);
+                }
+            });
+
+            // Esperar un momento para asegurar que todos los chunks se hayan recopilado
+            await new Promise(resolve => setTimeout(resolve, 100));
+
+            // Verificar que haya chunks de audio
+            if (!this.audioChunks || this.audioChunks.length === 0) {
+                console.warn("No hay audio para enviar");
+                alert("No se pudo enviar el mensaje de audio: No hay datos de audio");
+                this.isRecording = false;
+                this.audioChunks = [];
+                return;
+            }
+
+            // Crear el blob con todos los chunks
             const blob = new Blob(this.audioChunks, { type: 'audio/webm' });
+            
+            // Verificar que el blob tenga contenido
+            if (blob.size === 0) {
+                console.warn("El blob de audio está vacío");
+                alert("No se pudo enviar el mensaje de audio: El audio está vacío");
+                this.isRecording = false;
+                this.audioChunks = [];
+                return;
+            }
+
+            // Convertir a base64
             const base64 = await this.blobToBase64(blob);
 
+            // Guardar referencias locales ANTES de limpiar estado
+            const currentUser = this.currentUser;
+            const selectedGroup = this.selectedGroup;
+            const selectedContact = this.selectedContact;
+            const stream = this.mediaRecorder ? this.mediaRecorder.stream : null;
+
+            // Verificar que el usuario actual esté disponible
+            if (!currentUser || !currentUser.id) {
+                console.error("Usuario actual no disponible después de procesar audio");
+                alert("No se pudo enviar el mensaje de audio: Usuario no autenticado");
+                this.isRecording = false;
+                this.audioChunks = [];
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                }
+                this.mediaRecorder = null;
+                this.hideRecordingInterface();
+                return;
+            }
+
+            // Cerrar el stream de medios si existe
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+
+            // Limpiar el estado
             this.isRecording = false;
             this.audioChunks = [];
+            this.mediaRecorder = null;
 
-            // Enviar a backend según el chat activo
-            if (this.selectedGroup) {
-                await this.chatService.sendGroupMessage(
-                    this.selectedGroup.id,
-                    this.currentUser.id,
-                    base64,
-                    Chat.MessageTypeEnum.AUDIO
-                );
-            } else if (this.selectedContact) {
-                await this.chatService.sendPrivateMessage(
-                    this.currentUser.id,
-                    this.selectedContact.id,
-                    base64,
-                    Chat.MessageTypeEnum.AUDIO
-                );
-            } else {
-                await this.chatService.sendMessage(
-                    this.currentUser.id,
-                    base64,
-                    Chat.MessageTypeEnum.AUDIO
-                );
+            // Enviar a backend según el chat activo usando las referencias locales
+            try {
+                if (selectedGroup && selectedGroup.id) {
+                    console.log("Enviando audio al grupo:", selectedGroup.id);
+                    await this.chatService.sendGroupMessage(
+                        selectedGroup.id,
+                        currentUser.id,
+                        base64,
+                        Chat.MessageTypeEnum.AUDIO
+                    );
+                } else if (selectedContact && selectedContact.id) {
+                    console.log("Enviando audio a contacto:", selectedContact.id);
+                    await this.chatService.sendPrivateMessage(
+                        currentUser.id,
+                        selectedContact.id,
+                        base64,
+                        Chat.MessageTypeEnum.AUDIO
+                    );
+                } else {
+                    // Enviar al chat general
+                    console.log("Enviando audio al chat general");
+                    await this.chatService.sendMessage(
+                        currentUser.id,
+                        base64,
+                        Chat.MessageTypeEnum.AUDIO
+                    );
+                }
+            } catch (sendError) {
+                console.error("Error al enviar audio al servidor:", sendError);
+                throw sendError;
             }
 
             console.log("Audio enviado correctamente");
+            
+            // Ocultar la interfaz de grabación primero
+            this.hideRecordingInterface();
+            
+            // Esperar un momento para que el servidor procese el mensaje
+            await new Promise(resolve => setTimeout(resolve, 300));
+            
+            // Actualizar mensajes para mostrar el audio enviado
             await this.updateMessages();
 
         } catch (err) {
             console.error("Error enviando audio:", err);
-            alert("No se pudo enviar el mensaje de audio");
+            alert("No se pudo enviar el mensaje de audio: " + (err.message || err));
+            
+            // Limpiar el estado en caso de error
+            this.isRecording = false;
+            this.audioChunks = [];
+            if (this.mediaRecorder && this.mediaRecorder.stream) {
+                this.mediaRecorder.stream.getTracks().forEach(track => track.stop());
+            }
+            this.mediaRecorder = null;
+            this.hideRecordingInterface();
+        } finally {
+            // Siempre liberar el flag de envío
+            this.isSendingAudio = false;
         }
     }
 
@@ -933,19 +1125,37 @@ style.textContent = `
 `;
 document.head.appendChild(style);
 
-// Inicializar la aplicación
+// Inicializar la aplicación - Prevenir múltiples inicializaciones
 let app;
 
-window.addEventListener('DOMContentLoaded', async () => {
-    console.log(" Iniciando ChatApp...");
-    app = new ChatApp();
-    window.chatApp = app;
+// Solo inicializar si no existe ya una instancia
+if (!window.chatApp && !window.chatAppInstance) {
+    if (document.readyState === 'loading') {
+        window.addEventListener('DOMContentLoaded', async () => {
+            console.log(" Iniciando ChatApp...");
+            app = new ChatApp();
+            window.chatApp = app;
 
-    // Conectar al servidor
-    setTimeout(async () => {
-        await app.connect();
-    }, 500);
-});
+            // Conectar al servidor
+            setTimeout(async () => {
+                await app.connect();
+            }, 500);
+        });
+    } else {
+        // DOM ya está listo
+        console.log(" Iniciando ChatApp (DOM ya listo)...");
+        app = new ChatApp();
+        window.chatApp = app;
+
+        // Conectar al servidor
+        setTimeout(async () => {
+            await app.connect();
+        }, 500);
+    }
+} else {
+    console.log(" ChatApp ya está inicializado, reutilizando instancia existente");
+    app = window.chatApp || window.chatAppInstance;
+}
 
 // Desconectar al cerrar la página
 window.addEventListener('beforeunload', () => {

@@ -3,7 +3,6 @@ package model;
 import Chat.GroupDTO;
 import java.util.HashSet;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 public class UserGroup {
     private String id;
