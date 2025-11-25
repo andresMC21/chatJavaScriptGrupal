@@ -23,8 +23,13 @@ class ChatApp {
         this.selectedGroup = null;
         this.userGroups = new Set(); // Grupos a los que el usuario pertenece
 
-        // Flag para prevenir múltiples envíos simultáneos
-        this.isSendingAudio = false;
+        // Variables de audio
+        this.mediaRecorder = null;
+        this.audioChunks = [];
+        this.recordedAudio = null;
+        this.isRecording = false;
+        this.recordingStartTime = null;
+        this.recordingTimerInterval = null;
 
         // Referencias DOM
         this.messagesContainer = document.getElementById('messages');
@@ -32,10 +37,6 @@ class ChatApp {
         this.messageInput = document.getElementById('messageInput');
         this.sendBtn = document.getElementById('sendBtn');
         this.chatHeader = document.getElementById('chatHeader');
-
-        this.mediaRecorder = null;
-        this.audioChunks = [];
-        this.isRecording = false;
 
         this.initializeEventListeners();
         
@@ -58,25 +59,41 @@ class ChatApp {
             if (e.key === 'Enter') this.sendMessage();
         });
 
-        // Botón iniciar grabación
+        // Botón de micrófono para grabar audio - usar delegación de eventos para mayor robustez
         const micBtn = document.querySelector('.mic-btn');
-        if (micBtn && !micBtn.dataset.listenerAdded) {
-            micBtn.addEventListener('click', () => this.startRecording());
-            micBtn.dataset.listenerAdded = 'true';
+        if (micBtn) {
+            // Remover listener previo si existe
+            const newMicBtn = micBtn.cloneNode(true);
+            micBtn.parentNode.replaceChild(newMicBtn, micBtn);
+            newMicBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                this.handleMicClick();
+            });
         }
 
         // Botón cancelar grabación
         const cancelAudioBtn = document.querySelector('#recordingInput .cancel-btn');
-        if (cancelAudioBtn && !cancelAudioBtn.dataset.listenerAdded) {
-            cancelAudioBtn.addEventListener('click', () => this.cancelRecording());
-            cancelAudioBtn.dataset.listenerAdded = 'true';
+        if (cancelAudioBtn) {
+            const newCancelBtn = cancelAudioBtn.cloneNode(true);
+            cancelAudioBtn.parentNode.replaceChild(newCancelBtn, cancelAudioBtn);
+            newCancelBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                this.cancelRecording();
+            });
         }
 
         // Botón enviar audio
         const sendAudioBtn = document.querySelector('#recordingInput .send-btn');
-        if (sendAudioBtn && !sendAudioBtn.dataset.listenerAdded) {
-            sendAudioBtn.addEventListener('click', () => this.sendAudioMessage());
-            sendAudioBtn.dataset.listenerAdded = 'true';
+        if (sendAudioBtn) {
+            const newSendAudioBtn = sendAudioBtn.cloneNode(true);
+            sendAudioBtn.parentNode.replaceChild(newSendAudioBtn, sendAudioBtn);
+            newSendAudioBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                this.sendAudio();
+            });
         }
     }
 
@@ -235,6 +252,18 @@ class ChatApp {
                 // Obtener mensajes del chat general
                 messages = await this.chatService.getMessages();
             }
+            
+            // Log para depuración de mensajes de audio
+            messages.forEach(msg => {
+                if (msg.type && msg.type.value === ChatUI.MessageTypeEnum.AUDIO.value) {
+                    console.log("Mensaje de audio recibido - ID:", msg.id, "Longitud contenido:", msg.content ? msg.content.length : 0);
+                    if (msg.content && msg.content.length > 0) {
+                        console.log("  Primeros 100 chars:", msg.content.substring(0, Math.min(100, msg.content.length)));
+                        console.log("  Últimos 100 chars:", msg.content.substring(Math.max(0, msg.content.length - 100)));
+                    }
+                }
+            });
+            
             this.renderMessages(messages);
         } catch (error) {
             console.error("Error obteniendo mensajes:", error);
@@ -512,22 +541,46 @@ class ChatApp {
 
         const shouldScrollDown = this.isScrolledToBottom();
 
-        this.messagesContainer.innerHTML = '';
-
         if (messages.length === 0) {
-            this.messagesContainer.innerHTML = `
-                <div class="messages-placeholder">
-                    <i class="fas fa-comment-dots"></i>
-                    <p>No hay mensajes aún. ¡Sé el primero en escribir!</p>
-                </div>
-            `;
+            // Solo limpiar si realmente no hay mensajes
+            if (this.messagesContainer.children.length > 0) {
+                this.messagesContainer.innerHTML = `
+                    <div class="messages-placeholder">
+                        <i class="fas fa-comment-dots"></i>
+                        <p>No hay mensajes aún. ¡Sé el primero en escribir!</p>
+                    </div>
+                `;
+            }
             return;
         }
 
-        messages.forEach(msg => {
-            const messageDiv = this.createMessageElement(msg);
-            this.messagesContainer.appendChild(messageDiv);
+        // Obtener mensajes existentes en el DOM
+        const existingMessageIds = new Set();
+        const existingMessages = Array.from(this.messagesContainer.children).filter(child => {
+            const msgId = child.dataset.messageId;
+            if (msgId) {
+                existingMessageIds.add(msgId);
+                return true;
+            }
+            return false;
         });
+
+        // Si no hay mensajes en el DOM, renderizar todos
+        if (existingMessages.length === 0) {
+            this.messagesContainer.innerHTML = '';
+            messages.forEach(msg => {
+                const messageDiv = this.createMessageElement(msg);
+                this.messagesContainer.appendChild(messageDiv);
+            });
+        } else {
+            // Solo agregar mensajes nuevos al final
+            messages.forEach(msg => {
+                if (!existingMessageIds.has(msg.id)) {
+                    const messageDiv = this.createMessageElement(msg);
+                    this.messagesContainer.appendChild(messageDiv);
+                }
+            });
+        }
 
         if (shouldScrollDown) {
             this.scrollToBottom();
@@ -537,6 +590,7 @@ class ChatApp {
     createMessageElement(msg) {
         const isMyMessage = msg.senderId === this.currentUser.id;
         const messageDiv = document.createElement('div');
+        messageDiv.dataset.messageId = msg.id; // Asignar ID para evitar recrear mensajes existentes
 
         if (msg.type.value === ChatUI.MessageTypeEnum.SYSTEM.value) {
             messageDiv.className = 'system-message';
@@ -557,15 +611,131 @@ class ChatApp {
         } else if (msg.type.value === ChatUI.MessageTypeEnum.AUDIO.value) {
             const isMyMessage = msg.senderId === this.currentUser.id;
 
-            const audioUrl = "data:audio/webm;base64," + msg.content;
+            // Verificar que el contenido no esté vacío
+            if (!msg.content || msg.content.length === 0) {
+                messageDiv.className = isMyMessage ? 'message my-message' : 'message other-message';
+                messageDiv.innerHTML = `
+                    <div class="message-content">Error: Audio vacío</div>
+                    ${this.selectedGroup || !isMyMessage ? `<div class="message-sender">${this.escapeHtml(msg.senderName)}</div>` : ''}
+                `;
+                return messageDiv;
+            }
 
             messageDiv.className = isMyMessage ? 'message my-message' : 'message other-message';
-            messageDiv.innerHTML = `
-        <div class="message-content audio-message">
-            <audio controls src="${audioUrl}"></audio>
-        </div>
-        ${this.selectedGroup || !isMyMessage ? `<div class="message-sender">${this.escapeHtml(msg.senderName)}</div>` : ''}
-    `;
+            
+            // Crear contenedor del mensaje
+            const messageContent = document.createElement('div');
+            messageContent.className = 'message-content audio-message';
+            
+            // Crear elemento audio directamente (más confiable que innerHTML)
+            const audioElement = document.createElement('audio');
+            const audioId = `audio-${msg.id.replace(/[^a-zA-Z0-9]/g, '_')}`;
+            audioElement.id = audioId;
+            audioElement.controls = true;
+            audioElement.preload = 'metadata'; // Cambiar de 'auto' a 'metadata' para evitar carga completa
+            audioElement.autoplay = false; // Asegurar que no se reproduzca automáticamente
+            
+            // Intentar diferentes tipos MIME para compatibilidad
+            const mimeTypes = [
+                'audio/webm;codecs=opus',
+                'audio/webm',
+                'audio/ogg;codecs=opus',
+                'audio/mp4'
+            ];
+            
+            // Crear el data URI con el primer tipo MIME
+            const audioUrl = `data:${mimeTypes[0]};base64,${msg.content}`;
+            
+            // Log para depuración
+            console.log("Renderizando audio - ID:", msg.id, "Longitud base64:", msg.content.length);
+            console.log("URL de audio creada (primeros 100 chars):", audioUrl.substring(0, 100));
+            
+            // Agregar event listeners para depuración y manejo de errores
+            audioElement.addEventListener('loadedmetadata', () => {
+                console.log(`✓ Audio ${msg.id} cargado - Duración: ${audioElement.duration.toFixed(2)}s`);
+            });
+            
+            audioElement.addEventListener('canplay', () => {
+                console.log(`✓ Audio ${msg.id} puede reproducirse`);
+                // Asegurar que no se reproduzca automáticamente
+                if (audioElement.autoplay) {
+                    audioElement.pause();
+                    audioElement.currentTime = 0;
+                }
+            });
+            
+            audioElement.addEventListener('canplaythrough', () => {
+                console.log(`✓ Audio ${msg.id} listo para reproducir completamente`);
+                // Asegurar que no se reproduzca automáticamente
+                if (!audioElement.paused && audioElement.currentTime > 0) {
+                    audioElement.pause();
+                    audioElement.currentTime = 0;
+                }
+            });
+            
+            // Establecer la fuente después de configurar los listeners para evitar reproducción automática
+            audioElement.src = audioUrl;
+            
+            // Asegurar que esté pausado después de establecer la fuente
+            audioElement.pause();
+            audioElement.currentTime = 0;
+            
+            audioElement.addEventListener('error', (e) => {
+                console.error(`✗ Error cargando audio ${msg.id}:`, audioElement.error);
+                if (audioElement.error) {
+                    console.error("  Código:", audioElement.error.code);
+                    console.error("  Mensaje:", audioElement.error.message);
+                    
+                    // Intentar con otro tipo MIME si hay error
+                    if (audioElement.error.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
+                        console.log("  Intentando con tipo MIME alternativo...");
+                        for (let i = 1; i < mimeTypes.length; i++) {
+                            const altUrl = `data:${mimeTypes[i]};base64,${msg.content}`;
+                            console.log(`  Probando: ${mimeTypes[i]}`);
+                            audioElement.src = altUrl;
+                            break;
+                        }
+                    }
+                }
+            });
+            
+            audioElement.addEventListener('loadstart', () => {
+                console.log(`→ Audio ${msg.id} comenzando a cargar`);
+                // Asegurar que no se reproduzca automáticamente al cargar
+                if (!audioElement.paused) {
+                    audioElement.pause();
+                    audioElement.currentTime = 0;
+                }
+            });
+            
+            audioElement.addEventListener('loadeddata', () => {
+                console.log(`→ Audio ${msg.id} datos cargados`);
+                // Asegurar que no se reproduzca automáticamente después de cargar datos
+                if (!audioElement.paused) {
+                    audioElement.pause();
+                    audioElement.currentTime = 0;
+                }
+            });
+            
+            // Agregar el audio al contenedor
+            messageContent.appendChild(audioElement);
+            messageDiv.appendChild(messageContent);
+            
+            // Asegurar que esté pausado después de agregarlo al DOM (algunos navegadores pueden intentar reproducir)
+            setTimeout(() => {
+                if (!audioElement.paused) {
+                    audioElement.pause();
+                    audioElement.currentTime = 0;
+                }
+            }, 100);
+            
+            // Agregar nombre del remitente si es necesario
+            if (this.selectedGroup || !isMyMessage) {
+                const senderDiv = document.createElement('div');
+                senderDiv.className = 'message-sender';
+                senderDiv.textContent = msg.senderName;
+                messageDiv.appendChild(senderDiv);
+            }
         } else {
             messageDiv.className = isMyMessage ? 'message my-message' : 'message other-message';
 
@@ -628,57 +798,378 @@ class ChatApp {
         }
     }
 
+
+    // ========== FUNCIONALIDAD DE AUDIO - IMPLEMENTACIÓN SIMPLE ==========
+    
+    handleMicClick() {
+        if (!this.isRecording) {
+            this.startRecording();
+        } else {
+            this.sendAudio();
+        }
+    }
+
     async startRecording() {
+        // Validar que no esté grabando ya
+        if (this.isRecording) {
+            console.warn("Ya hay una grabación en curso");
+            return;
+        }
+        
         try {
-            if (this.isRecording) return;
-
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-            this.mediaRecorder = new MediaRecorder(stream);
+            console.log("Solicitando acceso al micrófono...");
+            
+            // Obtener acceso al micrófono con configuración optimizada
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true,
+                    sampleRate: 44100
+                } 
+            });
+            
+            console.log("✓ Acceso al micrófono concedido");
+            
+            // Determinar el mejor codec disponible
+            let mimeType = '';
+            const codecs = [
+                'audio/webm;codecs=opus',
+                'audio/webm',
+                'audio/ogg;codecs=opus',
+                'audio/mp4'
+            ];
+            
+            for (const codec of codecs) {
+                if (MediaRecorder.isTypeSupported(codec)) {
+                    mimeType = codec;
+                    console.log("Codec seleccionado:", codec);
+                    break;
+                }
+            }
+            
+            if (!mimeType) {
+                console.warn("Usando codec por defecto del navegador");
+            }
+            
+            // Crear MediaRecorder con el mejor codec
+            const options = mimeType ? { mimeType } : {};
+            this.mediaRecorder = new MediaRecorder(stream, options);
             this.audioChunks = [];
-            this.isRecording = true;
-
-            this.mediaRecorder.ondataavailable = e => {
-                if (e.data.size > 0) {
-                    this.audioChunks.push(e.data);
+            
+            // Capturar chunks de audio cada 100ms para mejor captura
+            this.mediaRecorder.ondataavailable = (event) => {
+                if (event.data && event.data.size > 0) {
+                    this.audioChunks.push(event.data);
+                    const totalSize = this.audioChunks.reduce((sum, chunk) => sum + chunk.size, 0);
+                    console.log(`Chunk recibido: ${event.data.size} bytes | Total: ${this.audioChunks.length} chunks, ${totalSize} bytes`);
                 }
             };
-
+            
+            // Cuando se detiene, crear el blob final
             this.mediaRecorder.onstop = () => {
-                // Este handler se sobrescribirá en sendAudioMessage si es necesario
-                console.log("Grabación detenida");
+                if (this.audioChunks.length > 0) {
+                    const audioBlob = new Blob(this.audioChunks, { type: mimeType || 'audio/webm' });
+                    this.recordedAudio = audioBlob;
+                    const totalSize = this.audioChunks.reduce((sum, chunk) => sum + chunk.size, 0);
+                    console.log("✓ Grabación detenida - Blob:", audioBlob.size, "bytes | Chunks totales:", totalSize, "bytes");
+                } else {
+                    console.warn("No se capturaron chunks de audio");
+                }
             };
-
-            this.mediaRecorder.start();
             
-            // Mostrar la interfaz de grabación
+            // Manejar errores del MediaRecorder
+            this.mediaRecorder.onerror = (event) => {
+                console.error("Error en MediaRecorder:", event.error);
+                alert("Error durante la grabación: " + event.error.message);
+                this.cancelRecording();
+            };
+            
+            // Iniciar grabación con timeslice de 100ms para capturar datos periódicamente
+            this.mediaRecorder.start(100);
+            this.isRecording = true;
+            this.recordingStartTime = Date.now();
+            
+            console.log("✓ Grabación iniciada");
+            
+            // Mostrar interfaz de grabación
             this.showRecordingInterface();
+            this.startRecordingTimer();
             
-            console.log("Grabación iniciada...");
-        } catch (e) {
-            console.error("Error iniciando grabación:", e);
-            alert("No se pudo acceder al micrófono");
+            // Cambiar icono del botón de micrófono a enviar
+            const micBtn = document.querySelector('.mic-btn');
+            if (micBtn) {
+                micBtn.innerHTML = '<i class="fas fa-paper-plane"></i>';
+                micBtn.title = "Enviar audio";
+            }
+            
+        } catch (error) {
+            console.error("Error al iniciar grabación:", error);
+            
+            let errorMessage = "No se pudo acceder al micrófono.";
+            if (error.name === 'NotAllowedError') {
+                errorMessage = "Permiso de micrófono denegado. Por favor, permite el acceso al micrófono en la configuración del navegador.";
+            } else if (error.name === 'NotFoundError') {
+                errorMessage = "No se encontró ningún micrófono. Por favor, conecta un micrófono e intenta de nuevo.";
+            } else if (error.name === 'NotReadableError') {
+                errorMessage = "El micrófono está siendo usado por otra aplicación. Por favor, cierra otras aplicaciones que usen el micrófono.";
+            } else {
+                errorMessage = error.message || errorMessage;
+            }
+            
+            alert(errorMessage);
             this.isRecording = false;
         }
     }
 
+    startRecordingTimer() {
+        const timeDisplay = document.querySelector('.recording-time');
+        if (!timeDisplay) return;
+
+        this.recordingTimerInterval = setInterval(() => {
+            if (!this.isRecording) {
+                clearInterval(this.recordingTimerInterval);
+                return;
+            }
+            const elapsed = Math.floor((Date.now() - this.recordingStartTime) / 1000);
+            const minutes = Math.floor(elapsed / 60);
+            const seconds = elapsed % 60;
+            timeDisplay.textContent = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+        }, 100);
+    }
+
     cancelRecording() {
-        if (!this.isRecording || !this.mediaRecorder) return;
-
-        try {
+        if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
             this.mediaRecorder.stop();
-        } catch { }
-
-        // Cerrar el stream de medios
+        }
+        
         if (this.mediaRecorder && this.mediaRecorder.stream) {
             this.mediaRecorder.stream.getTracks().forEach(track => track.stop());
         }
-
+        
+        if (this.recordingTimerInterval) {
+            clearInterval(this.recordingTimerInterval);
+            this.recordingTimerInterval = null;
+        }
+        
         this.isRecording = false;
         this.audioChunks = [];
+        this.recordedAudio = null;
         this.mediaRecorder = null;
         this.hideRecordingInterface();
-        console.log("Grabación cancelada");
+        this.resetMicButton();
+    }
+
+    async sendAudio() {
+        // Validar que hay algo para enviar
+        if (!this.isRecording && !this.recordedAudio) {
+            console.warn("No hay audio para enviar");
+            return;
+        }
+        
+        // Validar que el usuario esté conectado
+        if (!this.currentUser || !this.currentUser.id) {
+            alert("Debes estar conectado para enviar audio");
+            this.cancelRecording();
+            return;
+        }
+        
+        // Validar que el servicio esté disponible
+        if (!this.chatService) {
+            alert("Servicio de chat no disponible");
+            this.cancelRecording();
+            return;
+        }
+        
+        try {
+            // Si está grabando, detener la grabación primero
+            if (this.isRecording && this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+                console.log("Deteniendo grabación antes de enviar...");
+                
+                // Solicitar datos finales antes de detener
+                this.mediaRecorder.requestData();
+                
+                // Detener y esperar a que termine
+                await new Promise((resolve, reject) => {
+                    let resolved = false;
+                    const timeout = setTimeout(() => {
+                        if (!resolved) {
+                            resolved = true;
+                            console.warn("Timeout esperando detención de grabación");
+                            resolve();
+                        }
+                    }, 5000);
+                    
+                    const originalOnStop = this.mediaRecorder.onstop;
+                    this.mediaRecorder.onstop = () => {
+                        if (originalOnStop) originalOnStop();
+                        if (!resolved) {
+                            resolved = true;
+                            clearTimeout(timeout);
+                            // Esperar un poco más para que se procesen todos los chunks
+                            setTimeout(resolve, 300);
+                        }
+                    };
+                    
+                    this.mediaRecorder.onerror = (event) => {
+                        if (!resolved) {
+                            resolved = true;
+                            clearTimeout(timeout);
+                            reject(new Error("Error en MediaRecorder: " + event.error));
+                        }
+                    };
+                    
+                    try {
+                        this.mediaRecorder.stop();
+                    } catch (e) {
+                        if (!resolved) {
+                            resolved = true;
+                            clearTimeout(timeout);
+                            reject(e);
+                        }
+                    }
+                });
+            }
+            
+            // Cerrar stream de audio
+            if (this.mediaRecorder && this.mediaRecorder.stream) {
+                this.mediaRecorder.stream.getTracks().forEach(track => {
+                    track.stop();
+                    console.log("Track de audio detenido:", track.kind);
+                });
+            }
+            
+            // Detener timer de grabación
+            if (this.recordingTimerInterval) {
+                clearInterval(this.recordingTimerInterval);
+                this.recordingTimerInterval = null;
+            }
+
+            // Enforce minimum recording duration of 1 second
+            if (this.recordingStartTime) {
+                const durationSeconds = (Date.now() - this.recordingStartTime) / 1000;
+                console.log(`Duración de grabación: ${durationSeconds.toFixed(2)} segundos`);
+                if (durationSeconds < 1) {
+                    alert("El mensaje de audio es demasiado corto. Por favor, graba al menos 1 segundo de audio.");
+                    this.cancelRecording();
+                    return;
+                }
+            }
+            
+            // Crear el blob final con todos los chunks
+            let audioBlob = null;
+            const mimeType = this.mediaRecorder?.mimeType || 'audio/webm;codecs=opus';
+            
+            if (this.audioChunks.length > 0) {
+                audioBlob = new Blob(this.audioChunks, { type: mimeType });
+                const totalSize = this.audioChunks.reduce((sum, chunk) => sum + chunk.size, 0);
+                console.log("Blob creado - tamaño:", audioBlob.size, "bytes, chunks:", this.audioChunks.length, "tamaño total chunks:", totalSize, "bytes");
+            } else if (this.recordedAudio) {
+                audioBlob = this.recordedAudio;
+                console.log("Usando audio grabado previamente - tamaño:", audioBlob.size, "bytes");
+            }
+            
+            // Validar que el blob tenga contenido
+            if (!audioBlob || audioBlob.size === 0) {
+                alert("No hay audio para enviar. Por favor, graba un mensaje de audio.");
+                this.cancelRecording();
+                return;
+            }
+
+            // Warning if audio size is too small (e.g., less than 1KB ~ might be incomplete)
+            if (audioBlob.size < 1024) {
+                console.warn("Advertencia: El audio grabado es muy pequeño (" + audioBlob.size + " bytes). Puede estar incompleto o muy corto.");
+            }
+
+            // Log mediaRecorder state for debugging
+            if (this.mediaRecorder) {
+                console.log("Estado de mediaRecorder al enviar audio:", this.mediaRecorder.state);
+            }
+            
+            // Convertir a base64
+            console.log("Convirtiendo audio a base64...");
+            const base64 = await this.blobToBase64(audioBlob);
+            console.log("Base64 generado - longitud:", base64.length, "caracteres");
+            
+            // Guardar referencias antes de limpiar estado
+            const currentUser = this.currentUser;
+            const selectedGroup = this.selectedGroup;
+            const selectedContact = this.selectedContact;
+            
+            // Limpiar estado de grabación
+            this.isRecording = false;
+            this.audioChunks = [];
+            this.recordedAudio = null;
+            this.mediaRecorder = null;
+            this.hideRecordingInterface();
+            this.resetMicButton();
+            
+            // Enviar al servidor según el tipo de chat
+            console.log("Enviando audio al servidor...");
+            if (selectedGroup && selectedGroup.id) {
+                console.log("Enviando audio al grupo:", selectedGroup.name, "ID:", selectedGroup.id);
+                await this.chatService.sendGroupMessage(
+                    selectedGroup.id,
+                    currentUser.id,
+                    base64,
+                    Chat.MessageTypeEnum.AUDIO
+                );
+            } else if (selectedContact && selectedContact.id) {
+                console.log("Enviando audio a contacto privado:", selectedContact.username, "ID:", selectedContact.id);
+                await this.chatService.sendPrivateMessage(
+                    currentUser.id,
+                    selectedContact.id,
+                    base64,
+                    Chat.MessageTypeEnum.AUDIO
+                );
+            } else {
+                console.log("Enviando audio al chat general");
+                await this.chatService.sendMessage(
+                    currentUser.id,
+                    base64,
+                    Chat.MessageTypeEnum.AUDIO
+                );
+            }
+            
+            console.log("✓ Audio enviado correctamente al servidor");
+            
+            // Actualizar mensajes para mostrar el audio enviado
+            setTimeout(async () => {
+                await this.updateMessages();
+            }, 500);
+            
+        } catch (error) {
+            console.error("Error enviando audio:", error);
+            alert("Error al enviar audio: " + (error.message || error));
+            
+            // Limpiar estado en caso de error
+            this.cancelRecording();
+        }
+    }
+
+    blobToBase64(blob) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                const result = reader.result;
+                if (!result) {
+                    reject(new Error("Error al leer el audio"));
+                    return;
+                }
+                const base64 = result.split(',')[1];
+                resolve(base64);
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+        });
+    }
+
+    resetMicButton() {
+        const micBtn = document.querySelector('.mic-btn');
+        if (micBtn) {
+            micBtn.innerHTML = '<i class="fas fa-microphone"></i>';
+            micBtn.title = "Record voice note";
+        }
     }
 
     hideRecordingInterface() {
@@ -693,211 +1184,6 @@ class ChatApp {
         const normalInput = document.getElementById('normalInput');
         if (recordingInput) recordingInput.style.display = 'flex';
         if (normalInput) normalInput.style.display = 'none';
-    }
-
-    async sendAudioMessage() {
-        // Prevenir múltiples envíos simultáneos
-        if (this.isSendingAudio) {
-            console.warn("Ya hay un envío de audio en proceso, ignorando...");
-            return;
-        }
-
-        console.log("sendAudioMessage llamado - currentUser:", this.currentUser);
-        console.log("sendAudioMessage - selectedContact:", this.selectedContact);
-        console.log("sendAudioMessage - selectedGroup:", this.selectedGroup);
-        
-        // Verificar que el chatService esté disponible
-        if (!this.chatService) {
-            console.error("ChatService no disponible");
-            alert("No se pudo enviar el mensaje de audio: Servicio no disponible");
-            this.hideRecordingInterface();
-            return;
-        }
-
-        // Verificar que el usuario esté conectado
-        if (!this.currentUser || !this.currentUser.id) {
-            console.error("Usuario no conectado, no se puede enviar audio. currentUser:", this.currentUser);
-            alert("No se pudo enviar el mensaje de audio: Debes estar conectado primero");
-            this.hideRecordingInterface();
-            return;
-        }
-
-        // Marcar como enviando
-        this.isSendingAudio = true;
-
-        if (!this.mediaRecorder) {
-            console.warn("No se ha iniciado una grabación");
-            alert("No se pudo enviar el mensaje de audio: No hay grabación activa");
-            this.hideRecordingInterface();
-            return;
-        }
-
-        if (!this.isRecording && (!this.audioChunks || this.audioChunks.length === 0)) {
-            console.warn("No hay grabación activa ni datos de audio");
-            alert("No se pudo enviar el mensaje de audio: No hay grabación activa");
-            this.hideRecordingInterface();
-            return;
-        }
-
-        try {
-            // Detener la grabación y esperar a que termine
-            await new Promise((resolve, reject) => {
-                // Guardar el handler original si existe
-                const originalOnStop = this.mediaRecorder.onstop;
-                
-                this.mediaRecorder.onstop = () => {
-                    try {
-                        // Restaurar el handler original si existía
-                        if (originalOnStop) {
-                            originalOnStop();
-                        }
-                        resolve();
-                    } catch (e) {
-                        reject(e);
-                    }
-                };
-
-                this.mediaRecorder.onerror = (event) => {
-                    reject(new Error("Error en MediaRecorder: " + event.error));
-                };
-
-                try {
-                    if (this.mediaRecorder.state === 'recording') {
-                        this.mediaRecorder.stop();
-                    } else {
-                        // Si ya está detenido, resolver inmediatamente
-                        resolve();
-                    }
-                } catch (e) {
-                    reject(e);
-                }
-            });
-
-            // Esperar un momento para asegurar que todos los chunks se hayan recopilado
-            await new Promise(resolve => setTimeout(resolve, 100));
-
-            // Verificar que haya chunks de audio
-            if (!this.audioChunks || this.audioChunks.length === 0) {
-                console.warn("No hay audio para enviar");
-                alert("No se pudo enviar el mensaje de audio: No hay datos de audio");
-                this.isRecording = false;
-                this.audioChunks = [];
-                return;
-            }
-
-            // Crear el blob con todos los chunks
-            const blob = new Blob(this.audioChunks, { type: 'audio/webm' });
-            
-            // Verificar que el blob tenga contenido
-            if (blob.size === 0) {
-                console.warn("El blob de audio está vacío");
-                alert("No se pudo enviar el mensaje de audio: El audio está vacío");
-                this.isRecording = false;
-                this.audioChunks = [];
-                return;
-            }
-
-            // Convertir a base64
-            const base64 = await this.blobToBase64(blob);
-
-            // Guardar referencias locales ANTES de limpiar estado
-            const currentUser = this.currentUser;
-            const selectedGroup = this.selectedGroup;
-            const selectedContact = this.selectedContact;
-            const stream = this.mediaRecorder ? this.mediaRecorder.stream : null;
-
-            // Verificar que el usuario actual esté disponible
-            if (!currentUser || !currentUser.id) {
-                console.error("Usuario actual no disponible después de procesar audio");
-                alert("No se pudo enviar el mensaje de audio: Usuario no autenticado");
-                this.isRecording = false;
-                this.audioChunks = [];
-                if (stream) {
-                    stream.getTracks().forEach(track => track.stop());
-                }
-                this.mediaRecorder = null;
-                this.hideRecordingInterface();
-                return;
-            }
-
-            // Cerrar el stream de medios si existe
-            if (stream) {
-                stream.getTracks().forEach(track => track.stop());
-            }
-
-            // Limpiar el estado
-            this.isRecording = false;
-            this.audioChunks = [];
-            this.mediaRecorder = null;
-
-            // Enviar a backend según el chat activo usando las referencias locales
-            try {
-                if (selectedGroup && selectedGroup.id) {
-                    console.log("Enviando audio al grupo:", selectedGroup.id);
-                    await this.chatService.sendGroupMessage(
-                        selectedGroup.id,
-                        currentUser.id,
-                        base64,
-                        Chat.MessageTypeEnum.AUDIO
-                    );
-                } else if (selectedContact && selectedContact.id) {
-                    console.log("Enviando audio a contacto:", selectedContact.id);
-                    await this.chatService.sendPrivateMessage(
-                        currentUser.id,
-                        selectedContact.id,
-                        base64,
-                        Chat.MessageTypeEnum.AUDIO
-                    );
-                } else {
-                    // Enviar al chat general
-                    console.log("Enviando audio al chat general");
-                    await this.chatService.sendMessage(
-                        currentUser.id,
-                        base64,
-                        Chat.MessageTypeEnum.AUDIO
-                    );
-                }
-            } catch (sendError) {
-                console.error("Error al enviar audio al servidor:", sendError);
-                throw sendError;
-            }
-
-            console.log("Audio enviado correctamente");
-            
-            // Ocultar la interfaz de grabación primero
-            this.hideRecordingInterface();
-            
-            // Esperar un momento para que el servidor procese el mensaje
-            await new Promise(resolve => setTimeout(resolve, 300));
-            
-            // Actualizar mensajes para mostrar el audio enviado
-            await this.updateMessages();
-
-        } catch (err) {
-            console.error("Error enviando audio:", err);
-            alert("No se pudo enviar el mensaje de audio: " + (err.message || err));
-            
-            // Limpiar el estado en caso de error
-            this.isRecording = false;
-            this.audioChunks = [];
-            if (this.mediaRecorder && this.mediaRecorder.stream) {
-                this.mediaRecorder.stream.getTracks().forEach(track => track.stop());
-            }
-            this.mediaRecorder = null;
-            this.hideRecordingInterface();
-        } finally {
-            // Siempre liberar el flag de envío
-            this.isSendingAudio = false;
-        }
-    }
-
-    blobToBase64(blob) {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onloadend = () => resolve(reader.result.split(',')[1]);
-            reader.onerror = reject;
-            reader.readAsDataURL(blob);
-        });
     }
 
     selectContact(user) {

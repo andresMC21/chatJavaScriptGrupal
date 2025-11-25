@@ -204,19 +204,33 @@ body {
 .my-message .voice-duration { color: rgba(255,255,255,0.7); }
 
 /*AUDIO MESSAGES*/
-.audio-message { padding: 0; }
+.audio-message { 
+    padding: 8px 12px; 
+    display: flex;
+    align-items: center;
+}
 .audio-message audio { 
     width: 100%; 
     min-width: 250px; 
-    max-width: 300px; 
+    max-width: 400px; 
     height: 40px;
     outline: none;
+    display: block;
+    background: transparent;
 }
 .audio-message audio::-webkit-media-controls-panel {
     background-color: rgba(255, 255, 255, 0.1);
 }
+.audio-message audio::-webkit-media-controls-play-button {
+    background-color: rgba(255, 255, 255, 0.8);
+    border-radius: 50%;
+}
 .my-message .audio-message audio::-webkit-media-controls-panel {
     background-color: rgba(255, 255, 255, 0.2);
+}
+/* Asegurar que el audio sea visible y clickeable */
+.audio-message audio:not([src]) {
+    display: none;
 }
 
 /* COMPOSER (INPUT) AREA*/
@@ -227,15 +241,71 @@ body {
 .send-btn { width: 48px; height: 48px; border-radius: 14px; background: linear-gradient(135deg, var(--primary), var(--secondary)); color: white; cursor: pointer; border: none; font-size: 1.2rem; transition: all 0.2s ease; }
 .send-btn:hover { transform: scale(1.05); }
 
-/* RECORDING STATE*/
-.input-container.recording { border: 1px solid var(--danger); }
-.recording-indicator { width: 12px; height: 12px; background: var(--danger); border-radius: 50%; animation: pulse 1.5s infinite; }
-.recording-time { font-family: monospace; font-size: 1.1rem; color: var(--danger); }
-.recording-waveform { flex: 1; height: 40px; display: flex; align-items: center; justify-content: center; gap: 4px; }
-.recording-bar { width: 4px; background: var(--primary); border-radius: 2px; animation: wave 0.8s ease-in-out infinite; }
+/* RECORDING STATE - Estilo WhatsApp */
+.input-container.recording { 
+    border: 1px solid var(--danger); 
+    background: rgba(239, 68, 68, 0.1);
+    transition: all 0.3s ease;
+}
+.input-container.recording.cancel-mode {
+    background: rgba(239, 68, 68, 0.3);
+    border-color: var(--danger);
+}
+.recording-indicator { 
+    width: 12px; 
+    height: 12px; 
+    background: var(--danger); 
+    border-radius: 50%; 
+    animation: pulse 1.5s infinite; 
+}
+.recording-time { 
+    font-family: monospace; 
+    font-size: 1.1rem; 
+    color: var(--danger); 
+    font-weight: 600;
+}
+.recording-waveform { 
+    flex: 1; 
+    height: 40px; 
+    display: flex; 
+    align-items: center; 
+    justify-content: center; 
+    gap: 4px; 
+}
+.recording-bar { 
+    width: 4px; 
+    background: var(--primary); 
+    border-radius: 2px; 
+    animation: wave 0.8s ease-in-out infinite; 
+}
 .recording-bar:nth-child(2n) { animation-delay: 0.4s; }
-.cancel-btn { color: var(--danger); }
-.cancel-btn:hover { background: rgba(239, 68, 68, 0.2); }
+.cancel-btn { 
+    color: var(--danger); 
+    opacity: 0.7;
+}
+.cancel-btn:hover { 
+    background: rgba(239, 68, 68, 0.2); 
+    opacity: 1;
+}
+.send-btn {
+    opacity: 0.7;
+}
+.input-container.recording.cancel-mode .recording-time::after {
+    content: " - Desliza para cancelar";
+    font-size: 0.8rem;
+    opacity: 0.8;
+}
+.mic-btn {
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    touch-action: none;
+}
+.mic-btn:active {
+    transform: scale(0.95);
+    background: rgba(139, 92, 246, 0.2);
+}
 
 /* "CREATE GROUP" MODAL*/
 .modal-overlay {

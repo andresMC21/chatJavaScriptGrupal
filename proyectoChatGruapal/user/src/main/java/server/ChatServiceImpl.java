@@ -205,6 +205,16 @@ public class ChatServiceImpl implements ChatService, Subject {
 
         MessageType messageType = MessageType.fromIceEnum(type);
 
+        // Log para verificar el tamaño del contenido recibido
+        if (type == MessageTypeEnum.AUDIO) {
+            System.out.println("Mensaje de audio recibido - Longitud del contenido: " + content.length() + " caracteres");
+            System.out.println("Tamaño estimado del audio: " + (content.length() * 3) / 4 + " bytes");
+            if (content.length() > 0) {
+                System.out.println("Primeros 50 caracteres: " + content.substring(0, Math.min(50, content.length())));
+                System.out.println("Últimos 50 caracteres: " + content.substring(Math.max(0, content.length() - 50)));
+            }
+        }
+
         Message message = new Message(
             "msg_" + (++messageCounter),
             userId,
@@ -217,7 +227,11 @@ public class ChatServiceImpl implements ChatService, Subject {
         String chatId = getPrivateChatId(userId, targetUserId);
         privateMessages.computeIfAbsent(chatId, k -> new CopyOnWriteArrayList<>()).add(message);
 
-        System.out.println("[" + sender.getUsername() + " -> " + target.getUsername() + "]: " + content);
+        if (type == MessageTypeEnum.AUDIO) {
+            System.out.println("[" + sender.getUsername() + " -> " + target.getUsername() + "]: Audio guardado (tamaño: " + content.length() + " caracteres)");
+        } else {
+            System.out.println("[" + sender.getUsername() + " -> " + target.getUsername() + "]: " + content);
+        }
     }
     
     @Override
@@ -431,6 +445,12 @@ public class ChatServiceImpl implements ChatService, Subject {
         // Convertir tipo de mensaje
         MessageType messageType = MessageType.fromIceEnum(type);
         
+        // Log para verificar el tamaño del contenido recibido
+        if (type == MessageTypeEnum.AUDIO) {
+            System.out.println("Mensaje de audio en grupo recibido - Longitud del contenido: " + content.length() + " caracteres");
+            System.out.println("Tamaño estimado del audio: " + (content.length() * 3) / 4 + " bytes");
+        }
+        
         // Crear el mensaje
         Message message = new Message(
             "msg_" + (++messageCounter),
@@ -444,7 +464,11 @@ public class ChatServiceImpl implements ChatService, Subject {
         groupMessages.computeIfAbsent(groupId, k -> new CopyOnWriteArrayList<>()).add(message);
         
         // Log en consola del servidor
-        System.out.println(" [Grupo: " + group.getName() + "] " + user.getUsername() + ": " + content);
+        if (type == MessageTypeEnum.AUDIO) {
+            System.out.println(" [Grupo: " + group.getName() + "] " + user.getUsername() + ": Audio guardado (tamaño: " + content.length() + " caracteres)");
+        } else {
+            System.out.println(" [Grupo: " + group.getName() + "] " + user.getUsername() + ": " + content);
+        }
     }
 
     @Override

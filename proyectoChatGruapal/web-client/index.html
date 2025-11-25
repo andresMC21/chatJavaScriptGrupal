@@ -149,21 +149,8 @@
         }
 
         document.addEventListener('DOMContentLoaded', () => {
-            // Voice recording UI logic
-            const micBtn = document.querySelector('.mic-btn');
-            const normalInput = document.getElementById('normalInput');
-            const recordingInput = document.getElementById('recordingInput');
-            const cancelRecordingBtn = recordingInput.querySelector('.cancel-btn');
-
-            micBtn.addEventListener('click', () => {
-                normalInput.style.display = 'none';
-                recordingInput.style.display = 'flex';
-            });
-
-            cancelRecordingBtn.addEventListener('click', () => {
-                recordingInput.style.display = 'none';
-                normalInput.style.display = 'flex';
-            });
+            // Voice recording UI logic - Ahora manejado completamente por ChatApp.js
+            // No es necesario duplicar aquí, ChatApp.js ya maneja todo
 
             // Create group modal logic
             const createGroupBtn = document.getElementById('createGroupBtn');
